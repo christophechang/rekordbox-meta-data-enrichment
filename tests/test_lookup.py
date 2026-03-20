@@ -92,6 +92,29 @@ async def test_lookup_discogs_returns_candidates() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_lookup_discogs_does_not_map_format_to_mix() -> None:
+    """Discogs 'format' is the release medium (Vinyl, File, CD) — must never populate Mix."""
+    response = {
+        "results": [
+            {
+                "id": 99,
+                "title": "DJ Example - Some Track",
+                "year": "2021",
+                "label": ["Defected"],
+                "format": ["Vinyl", "12\"", "LP"],
+            }
+        ]
+    }
+    respx.get("https://api.discogs.com/database/search").mock(
+        return_value=Response(200, content=json.dumps(response).encode())
+    )
+    candidates = await lookup_discogs(_TRACK, token=None)
+    assert len(candidates) == 1
+    assert candidates[0].mix == ""
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_lookup_discogs_returns_empty_on_error() -> None:
     respx.get("https://api.discogs.com/database/search").mock(return_value=Response(429))
     candidates = await lookup_discogs(_TRACK, token=None)

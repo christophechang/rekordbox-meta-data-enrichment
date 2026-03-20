@@ -225,6 +225,9 @@ def test_write_enriched_xml_full_export_every_track_in_exactly_one_playlist(tmp_
     # Track 2 already_complete → also in Updated Tracks (covered, nothing to fix)
     assert updated.find("TRACK[@Key='2']") is not None
 
+    # Track 2 must also appear in the COLLECTION so Rekordbox can resolve the playlist reference
+    assert tree.find(".//TRACK[@TrackID='2']") is not None
+
     # No Unable to Enrich playlist (nothing unresolved)
     assert tree.find(".//NODE[@Name='Unable to Enrich']") is None
 

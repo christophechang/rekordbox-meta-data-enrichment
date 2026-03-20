@@ -92,6 +92,10 @@ def write_enriched_xml(
 
             applied += 1
 
+        # In full_export mode, already-complete tracks are kept as-is so playlists resolve correctly
+        elif full_export and decision.status == "skipped_already_complete":
+            pass
+
         # Blank colour for tracks with no usable match in colour-confidence mode
         elif decision.clear_colour:
             element.set("Colour", "")

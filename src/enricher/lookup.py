@@ -9,7 +9,7 @@ from enricher.models import CandidateMatch, TrackRecord
 
 _MB_BASE = "https://musicbrainz.org/ws/2"
 _DISCOGS_BASE = "https://api.discogs.com"
-_USER_AGENT = "RekordboxEnricher/0.1 ( https://github.com/christophechang/RekordboxMetaDataEnrichment )"
+_USER_AGENT = "RekordboxEnricher/0.1 ( https://github.com/christophechang/rekordbox-meta-data-enrichment )"
 
 _MB_SEMAPHORE: asyncio.Semaphore | None = None
 _DISCOGS_SEMAPHORE: asyncio.Semaphore | None = None
@@ -215,8 +215,6 @@ def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> lis
         year = str(year_raw) if year_raw else ""
         label_list = result.get("label", [])
         label = str(label_list[0]) if isinstance(label_list, list) and label_list else ""
-        formats = result.get("format", [])
-        mix = str(formats[0]) if isinstance(formats, list) and formats else ""
 
         candidates.append(
             CandidateMatch(
@@ -228,7 +226,7 @@ def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> lis
                 year=year,
                 remixer="",
                 album=str(result.get("title", "")),
-                mix=mix,
+                mix="",
                 duration_seconds=None,
             )
         )
