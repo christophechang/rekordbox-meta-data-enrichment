@@ -92,6 +92,72 @@ async def test_lookup_discogs_returns_candidates() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_lookup_discogs_extracts_style_tags() -> None:
+    response = {
+        "results": [
+            {
+                "id": 99,
+                "title": "DJ Example - Some Track",
+                "year": "2021",
+                "label": ["Defected"],
+                "format": ["Vinyl"],
+                "style": ["Breakbeat", "Speed Garage"],
+            }
+        ]
+    }
+    respx.get("https://api.discogs.com/database/search").mock(
+        return_value=Response(200, content=json.dumps(response).encode())
+    )
+    candidates = await lookup_discogs(_TRACK, token=None)
+    assert candidates[0].styles == ["Breakbeat", "Speed Garage"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lookup_musicbrainz_prefers_non_compilation_release() -> None:
+    """MB should pick the non-compilation release for label/year even if it appears later."""
+    response = {
+        "recordings": [
+            {
+                "id": "mb-001",
+                "title": "Some Track",
+                "length": 360000,
+                "artist-credit": [{"artist": {"name": "DJ Example"}}],
+                "releases": [
+                    {
+                        "title": "Ministry of Sound Compilation",
+                        "date": "2019",
+                        "label-info": [{"label": {"name": "Ministry of Sound"}}],
+                        "release-group": {
+                            "primary-type": "Album",
+                            "secondary-types": ["Compilation"],
+                        },
+                    },
+                    {
+                        "title": "Original EP",
+                        "date": "2018",
+                        "label-info": [{"label": {"name": "Defected"}}],
+                        "release-group": {
+                            "primary-type": "EP",
+                            "secondary-types": [],
+                        },
+                    },
+                ],
+                "relations": [],
+            }
+        ]
+    }
+    respx.get("https://musicbrainz.org/ws/2/recording/").mock(
+        return_value=Response(200, content=json.dumps(response).encode())
+    )
+    candidates = await lookup_musicbrainz(_TRACK)
+    assert candidates[0].label == "Defected"
+    assert candidates[0].year == "2018"
+    assert candidates[0].album == "Original EP"
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_lookup_discogs_does_not_map_format_to_mix() -> None:
     """Discogs 'format' is the release medium (Vinyl, File, CD) — must never populate Mix."""
     response = {

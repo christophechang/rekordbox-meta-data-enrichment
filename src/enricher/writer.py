@@ -118,7 +118,6 @@ def write_enriched_xml(
     # not Updated Tracks. Build both lists from decisions, not from COLLECTION contents.
     if full_export:
         unresolved_ids = [d.track_id for d in decisions if d.status in _UNRESOLVABLE_STATUSES]
-        unresolved_id_set = set(unresolved_ids)
         enriched_ids = [d.track_id for d in decisions if d.status == "enriched"]
         already_complete_ids = [d.track_id for d in decisions if d.status == "skipped_already_complete"]
         updated_ids = enriched_ids + already_complete_ids

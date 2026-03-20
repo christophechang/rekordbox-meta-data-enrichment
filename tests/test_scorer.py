@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from enricher.models import CandidateMatch, TrackRecord
-from enricher.scorer import score_all, score_candidate
+from enricher.scorer import filter_styles_by_bpm, score_all, score_candidate
 
 
 def _make_track(artist: str = "DJ Example", title: str = "Some Track", duration: int = 360) -> TrackRecord:
@@ -86,3 +86,40 @@ def test_score_parametrized(artist: str, title: str, expected_min: float) -> Non
     track = _make_track()
     candidate = _make_candidate(artist=artist, title=title)
     assert score_candidate(track, candidate) >= expected_min
+
+
+def test_filter_styles_by_bpm_removes_incompatible() -> None:
+    # Borai - Make Me at 130 BPM: D&B (158-185) should be dropped, others kept
+    styles = ["Breakbeat", "Drum n Bass", "Speed Garage", "House"]
+    result = filter_styles_by_bpm(styles, 130.0)
+    assert "Drum n Bass" not in result
+    assert "Breakbeat" in result
+    assert "Speed Garage" in result
+    assert "House" in result
+
+
+def test_filter_styles_by_bpm_keeps_unknown_styles() -> None:
+    styles = ["Breakbeat", "Afrobeats"]  # Afrobeats not in map
+    result = filter_styles_by_bpm(styles, 130.0)
+    assert "Afrobeats" in result  # unknown = keep
+
+
+def test_filter_styles_by_bpm_zero_bpm_returns_all() -> None:
+    styles = ["Breakbeat", "Drum n Bass", "House"]
+    assert filter_styles_by_bpm(styles, 0.0) == styles
+
+
+@pytest.mark.parametrize(
+    ("bpm", "style", "expected_in"),
+    [
+        (174.0, "Drum n Bass", True),
+        (130.0, "Drum n Bass", False),
+        (125.0, "House", True),
+        (150.0, "House", False),
+        (135.0, "Techno", True),
+        (110.0, "Techno", False),
+    ],
+)
+def test_filter_styles_bpm_boundary_cases(bpm: float, style: str, expected_in: bool) -> None:
+    result = filter_styles_by_bpm([style], bpm)
+    assert (style in result) == expected_in

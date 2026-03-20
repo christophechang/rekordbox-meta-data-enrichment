@@ -30,6 +30,7 @@ class CandidateMatch(BaseModel):
     remixer: str = ""
     album: str = ""
     mix: str = ""
+    styles: list[str] = []
     duration_seconds: int | None = None
     confidence: float = 0.0
 

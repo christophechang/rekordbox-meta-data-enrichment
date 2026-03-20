@@ -6,7 +6,7 @@ from enricher.cache import CacheProtocol
 from enricher.disambiguator import disambiguate
 from enricher.lookup import lookup_discogs, lookup_musicbrainz
 from enricher.models import CandidateMatch, EnrichmentDecision, TrackRecord
-from enricher.scorer import score_all
+from enricher.scorer import filter_styles_by_bpm, score_all
 
 # Keywords in artist or title that indicate an unofficial release, checked when no API match found.
 # Ordered by specificity — first match wins.
@@ -52,6 +52,26 @@ def _heuristic_label(track: TrackRecord) -> str | None:
         if keyword in haystack:
             return label
     return None
+
+
+def _apply_styles(track: TrackRecord, best: CandidateMatch, all_candidates: list[CandidateMatch]) -> CandidateMatch:
+    """Populate the mix field with BPM-compatible Discogs style tags when mix is unused.
+
+    Collects styles from the best match (or borrows from any Discogs candidate if the best
+    has none), filters by the track's BPM, and writes the result as a comma-separated string.
+    Skipped if the track already has a mix designation or no compatible styles are found.
+    """
+    if track.mix:
+        return best
+    styles = best.styles
+    if not styles:
+        discogs_with_styles = [c for c in all_candidates if c.source == "discogs" and c.styles]
+        if discogs_with_styles:
+            styles = max(discogs_with_styles, key=lambda c: c.confidence).styles
+    compatible = filter_styles_by_bpm(styles, track.bpm)
+    if not compatible:
+        return best
+    return best.model_copy(update={"mix": ", ".join(compatible)})
 
 
 def _fields_changed(track: TrackRecord, match: CandidateMatch) -> dict[str, tuple[str, str]]:
@@ -156,7 +176,7 @@ async def process_track(
         cache.put(track.artist, track.name, [], decision)
         return decision
 
-    best = _fill_label(scored[0], candidates)
+    best = _apply_styles(track, _fill_label(scored[0], candidates), candidates)
 
     # --- Auto-enrich path (high confidence) ---
     if best.confidence >= confidence_threshold:
@@ -187,7 +207,7 @@ async def process_track(
         ambiguous = [c for c in scored if c.confidence >= _DISAMBIG_LOW]
         chosen_idx, provider = await disambiguate(track, ambiguous)
         if chosen_idx >= 0 and provider is not None:
-            chosen = _fill_label(ambiguous[chosen_idx], candidates)
+            chosen = _apply_styles(track, _fill_label(ambiguous[chosen_idx], candidates), candidates)
             changed = _fields_changed(track, chosen)
             if not changed:
                 decision = EnrichmentDecision(

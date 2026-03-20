@@ -13,6 +13,89 @@ _REMIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# BPM ranges for common electronic music styles sourced from Discogs.
+# Tracks outside a style's range are filtered out — e.g. a 130 BPM track cannot be Drum n Bass.
+# Styles absent from this map are kept (unknown = don't discard).
+_STYLE_BPM_RANGES: dict[str, tuple[int, int]] = {
+    # House family
+    "House": (118, 132),
+    "Deep House": (118, 128),
+    "Tech House": (122, 135),
+    "Funky House": (118, 130),
+    "Soulful House": (118, 130),
+    "Disco House": (115, 128),
+    "Electro House": (124, 135),
+    "Progressive House": (124, 135),
+    # Techno
+    "Techno": (130, 155),
+    "Minimal Techno": (128, 145),
+    "Detroit Techno": (128, 150),
+    "Industrial Techno": (128, 155),
+    "Industrial": (118, 160),
+    # Trance
+    "Trance": (128, 150),
+    "Progressive Trance": (128, 145),
+    "Psytrance": (138, 150),
+    "Uplifting Trance": (135, 150),
+    # Breaks / Jungle / DnB
+    "Breakbeat": (115, 145),
+    "Breaks": (115, 145),
+    "Jungle": (150, 175),
+    "Drum n Bass": (158, 185),
+    "Liquid Funk": (162, 180),
+    "Neurofunk": (162, 185),
+    # UK Garage / Dubstep
+    "UK Garage": (128, 142),
+    "Speed Garage": (128, 140),
+    "2-Step": (128, 140),
+    "Grime": (133, 145),
+    "Dubstep": (135, 145),
+    # Rave / Hardcore
+    "Rave": (130, 165),
+    "Hardcore": (155, 200),
+    "Happy Hardcore": (155, 200),
+    "Gabber": (160, 230),
+    # Electro / Electronic
+    "Electro": (108, 128),
+    "Electronica": (90, 145),
+    "IDM": (80, 165),
+    # Ambient / Downtempo
+    "Ambient": (60, 110),
+    "Downtempo": (75, 105),
+    "Trip Hop": (75, 100),
+    # Disco / Funk
+    "Disco": (110, 128),
+    "Nu-Disco": (112, 126),
+    "Funk": (80, 125),
+    # Hip Hop
+    "Hip Hop": (75, 105),
+    "Hip-Hop": (75, 105),
+    "Trap": (60, 85),
+    # Soul / R&B
+    "Soul": (70, 120),
+    "R&B": (60, 105),
+    # Reggae / Dub
+    "Reggae": (60, 100),
+    "Dub": (60, 100),
+    "Dancehall": (60, 100),
+}
+
+
+def filter_styles_by_bpm(styles: list[str], bpm: float) -> list[str]:
+    """Return only styles whose typical BPM range includes the given BPM.
+
+    Styles not in ``_STYLE_BPM_RANGES`` are kept — unknown does not mean incompatible.
+    """
+    if not bpm:
+        return styles
+    result = []
+    for style in styles:
+        bounds = _STYLE_BPM_RANGES.get(style)
+        if bounds is None or bounds[0] <= bpm <= bounds[1]:
+            result.append(style)
+    return result
+
+
 # Genre family groupings for the bonus score
 _GENRE_FAMILIES: list[frozenset[str]] = [
     frozenset({"house", "deep house", "tech house", "afro house", "funky house", "soulful house", "disco house"}),

@@ -87,6 +87,29 @@ def _discogs_headers(token: str | None) -> dict[str, str]:
     return headers
 
 
+def _best_mb_release(releases: list[object]) -> dict[str, object] | None:
+    """Pick the most useful release for label/year/album metadata.
+
+    Prefers non-compilation, non-DJ-mix releases (so we get the original label rather
+    than a compilation imprint), then breaks ties by earliest release date.
+    """
+    valid = [r for r in releases if isinstance(r, dict)]
+    if not valid:
+        return None
+
+    def _is_compilation_or_dj_mix(r: dict[str, object]) -> bool:
+        rg = r.get("release-group", {})
+        if not isinstance(rg, dict):
+            return False
+        secondary = rg.get("secondary-types", [])
+        return isinstance(secondary, list) and any(t in ("Compilation", "DJ-mix") for t in secondary)
+
+    def _sort_key(r: dict[str, object]) -> tuple[int, str]:
+        return (1 if _is_compilation_or_dj_mix(r) else 0, str(r.get("date", "") or "9999"))
+
+    return min(valid, key=_sort_key)
+
+
 def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
     candidates: list[CandidateMatch] = []
     recordings = data.get("recordings", [])
@@ -110,24 +133,23 @@ def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
                 if isinstance(artist_obj, dict):
                     artist = str(artist_obj.get("name", ""))
 
-        # Pull label, year, album from first release
+        # Pull label, year, album from best release (prefer non-compilation, then earliest)
         label = ""
         year = ""
         album = ""
         releases = rec.get("releases", [])
-        if isinstance(releases, list) and releases:
-            first_release = releases[0]
-            if isinstance(first_release, dict):
-                album = str(first_release.get("title", ""))
-                date_raw = first_release.get("date", "")
-                year = str(date_raw)[:4] if date_raw else ""
-                label_info = first_release.get("label-info", [])
-                if isinstance(label_info, list) and label_info:
-                    first_label = label_info[0]
-                    if isinstance(first_label, dict):
-                        label_obj = first_label.get("label", {})
-                        if isinstance(label_obj, dict):
-                            label = str(label_obj.get("name", ""))
+        best_release = _best_mb_release(releases if isinstance(releases, list) else [])
+        if best_release is not None:
+            album = str(best_release.get("title", ""))
+            date_raw = best_release.get("date", "")
+            year = str(date_raw)[:4] if date_raw else ""
+            label_info = best_release.get("label-info", [])
+            if isinstance(label_info, list) and label_info:
+                first_label = label_info[0]
+                if isinstance(first_label, dict):
+                    label_obj = first_label.get("label", {})
+                    if isinstance(label_obj, dict):
+                        label = str(label_obj.get("name", ""))
 
         # Extract remixer from relations
         remixer = ""
@@ -215,6 +237,8 @@ def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> lis
         year = str(year_raw) if year_raw else ""
         label_list = result.get("label", [])
         label = str(label_list[0]) if isinstance(label_list, list) and label_list else ""
+        style_list = result.get("style", [])
+        styles = [str(s) for s in style_list] if isinstance(style_list, list) else []
 
         candidates.append(
             CandidateMatch(
@@ -227,6 +251,7 @@ def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> lis
                 remixer="",
                 album=str(result.get("title", "")),
                 mix="",
+                styles=styles,
                 duration_seconds=None,
             )
         )
