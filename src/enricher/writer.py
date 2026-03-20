@@ -125,8 +125,7 @@ def write_enriched_xml(
         updated_ids = [element.get("TrackID", "") for element in collection.findall("TRACK")]
         updated_id_set = set(updated_ids)
         unresolved_ids = [
-            d.track_id for d in decisions
-            if d.status == "skipped_no_match" and d.track_id not in updated_id_set
+            d.track_id for d in decisions if d.status == "skipped_no_match" and d.track_id not in updated_id_set
         ]
     root.append(_build_playlists(updated_ids, unresolved_ids))
 

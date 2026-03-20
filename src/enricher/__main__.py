@@ -23,6 +23,8 @@ _DEFAULT_INPUT = Path("import/rekordbox.xml")
 
 def _default_output() -> Path:
     return Path(f"export/rekordbox_export_{date.today().isoformat()}.xml")
+
+
 _DEFAULT_CACHE = Path(".enrichment_cache.json")
 _DEFAULT_CONFIDENCE = 0.85
 

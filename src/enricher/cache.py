@@ -14,6 +14,7 @@ class CacheProtocol(Protocol):
     def put(self, artist: str, title: str, candidates: list[CandidateMatch], decision: EnrichmentDecision) -> None: ...
     def flush(self) -> None: ...
 
+
 _SAVE_INTERVAL = 50  # write to disk every N decisions
 
 

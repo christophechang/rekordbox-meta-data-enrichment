@@ -50,7 +50,8 @@ _MIX_DESIGNATOR_RE = re.compile(
     r"\s*[\[\(]"
     r"(?:Original Mix|Extended Mix|Extended|Club Mix|VIP Mix|Dub Mix|Dub|Instrumental|"
     r"Radio Edit|Radio Mix|Album Version|Single Version|\d{4}\s+Remaster(?:ed)?|"
-    r"feat\.[^)\]]*|ft\.[^)\]]*|with\s+[^)\]]*|Featuring\s+[^)\]]*)"
+    r"feat\.[^)\]]*|ft\.[^)\]]*|with\s+[^)\]]*|Featuring\s+[^)\]]*|"
+    r"[^)\]]+\s+(?:presents|pres\.?)\s+[^)\]]*)"
     r"[\]\)]\s*",
     re.IGNORECASE,
 )
@@ -73,6 +74,11 @@ def _primary_artist(artist: str) -> str:
     for sep in ("/", ",", " & ", " x ", " vs ", " vs. "):
         if sep in artist:
             return artist.split(sep)[0].strip()
+    # feat./ft./presents are lower-priority — check after hard separators
+    for sep in (" feat. ", " feat ", " ft. ", " ft ", " presents ", " pres. ", " pres "):
+        idx = artist.lower().find(sep.lower())
+        if idx != -1:
+            return artist[:idx].strip()
     return artist
 
 

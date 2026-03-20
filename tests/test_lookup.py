@@ -6,7 +6,7 @@ import pytest
 import respx
 from httpx import Response
 
-from enricher.lookup import lookup_discogs, lookup_musicbrainz
+from enricher.lookup import _primary_artist, _strip_mix_designators, lookup_discogs, lookup_musicbrainz
 from enricher.models import TrackRecord
 
 _TRACK = TrackRecord(
@@ -167,7 +167,7 @@ async def test_lookup_discogs_does_not_map_format_to_mix() -> None:
                 "title": "DJ Example - Some Track",
                 "year": "2021",
                 "label": ["Defected"],
-                "format": ["Vinyl", "12\"", "LP"],
+                "format": ["Vinyl", '12"', "LP"],
             }
         ]
     }
@@ -185,3 +185,57 @@ async def test_lookup_discogs_returns_empty_on_error() -> None:
     respx.get("https://api.discogs.com/database/search").mock(return_value=Response(429))
     candidates = await lookup_discogs(_TRACK, token=None)
     assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _primary_artist helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("artist", "expected"),
+    [
+        ("DJ Example", "DJ Example"),
+        ("DJ Example / Second Artist", "DJ Example"),
+        ("DJ Example, Second Artist", "DJ Example"),
+        ("DJ Example & Second Artist", "DJ Example"),
+        ("DJ Example x Second Artist", "DJ Example"),
+        ("DJ Example vs Second Artist", "DJ Example"),
+        ("DJ Example feat. Second Artist", "DJ Example"),
+        ("DJ Example feat Second Artist", "DJ Example"),
+        ("DJ Example ft. Second Artist", "DJ Example"),
+        ("DJ Example ft Second Artist", "DJ Example"),
+        ("DJ Example presents Second Artist", "DJ Example"),
+        ("DJ Example pres. Second Artist", "DJ Example"),
+        ("DJ Example pres Second Artist", "DJ Example"),
+        # case-insensitive matching must preserve original case of primary
+        ("DJ Example Feat. Second Artist", "DJ Example"),
+        ("DJ Example PRESENTS Second Artist", "DJ Example"),
+    ],
+)
+def test_primary_artist_extracts_first_credit(artist: str, expected: str) -> None:
+    assert _primary_artist(artist) == expected
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _strip_mix_designators helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Some Track (Original Mix)", "Some Track"),
+        ("Some Track (Extended Mix)", "Some Track"),
+        ("Some Track [Club Mix]", "Some Track"),
+        ("Some Track (feat. Second Artist)", "Some Track"),
+        ("Some Track (ft. Second Artist)", "Some Track"),
+        # (Artist Presents X) — common for artist alias releases
+        ("Terminator (Goldie Presents Rufige Kru)", "Terminator"),
+        ("Blue Lines (Massive Attack Presents Mad Professor)", "Blue Lines"),
+        # Bare title unchanged
+        ("Some Track", "Some Track"),
+    ],
+)
+def test_strip_mix_designators_removes_qualifiers(title: str, expected: str) -> None:
+    assert _strip_mix_designators(title) == expected

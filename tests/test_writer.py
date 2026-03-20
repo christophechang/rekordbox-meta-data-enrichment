@@ -129,9 +129,7 @@ def test_write_enriched_xml_clears_colour_for_no_match_decision(tmp_path: Path) 
 
 def test_write_enriched_xml_skipped_no_colour_change_excluded(tmp_path: Path) -> None:
     source = tmp_path / "source.xml"
-    xml_with_colour = _SOURCE_XML.replace(
-        'TrackID="2" Name="Beta"', 'TrackID="2" Name="Beta" Colour="0xFF0000"'
-    )
+    xml_with_colour = _SOURCE_XML.replace('TrackID="2" Name="Beta"', 'TrackID="2" Name="Beta" Colour="0xFF0000"')
     source.write_text(xml_with_colour, encoding="utf-8")
     output = tmp_path / "output.xml"
 
@@ -154,7 +152,7 @@ def test_write_enriched_xml_skipped_no_colour_change_excluded(tmp_path: Path) ->
 def test_write_enriched_xml_builds_updated_tracks_playlist(tmp_path: Path) -> None:
     xml_with_playlists = _SOURCE_XML.replace(
         "</DJ_PLAYLISTS>",
-        "  <PLAYLISTS><NODE Type=\"0\" Name=\"ROOT\"/></PLAYLISTS>\n</DJ_PLAYLISTS>",
+        '  <PLAYLISTS><NODE Type="0" Name="ROOT"/></PLAYLISTS>\n</DJ_PLAYLISTS>',
     )
     source = tmp_path / "source.xml"
     source.write_text(xml_with_playlists, encoding="utf-8")
