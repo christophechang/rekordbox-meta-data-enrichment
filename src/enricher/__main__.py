@@ -131,8 +131,9 @@ async def run(args: argparse.Namespace) -> None:
 
         if i % 50 == 0 or i == total:
             cache.flush()
-            enriched_so_far = sum(1 for d in decisions if d.status == "enriched")
-            print(f"Progress: {i}/{total} | enriched: {enriched_so_far}", file=sys.stderr)
+            enriched_from_cache = sum(1 for d in decisions if d.status == "enriched" and d.cache_hit)
+            enriched_live = sum(1 for d in decisions if d.status == "enriched" and not d.cache_hit)
+            print(f"Progress: {i}/{total} | enriched: {enriched_from_cache + enriched_live} (live: {enriched_live}, cached: {enriched_from_cache})", file=sys.stderr)
 
     cache.flush()
 

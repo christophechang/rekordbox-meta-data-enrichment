@@ -105,7 +105,7 @@ async def process_track(
     cached = cache.get(track.artist, track.name)
     if cached is not None:
         _candidates, decision = cached
-        return decision
+        return decision.model_copy(update={"cache_hit": True})
 
     if _is_already_complete(track):
         decision = EnrichmentDecision(
