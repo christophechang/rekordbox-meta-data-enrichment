@@ -10,27 +10,46 @@ Enriches a Rekordbox XML library export with release metadata (label, year, remi
 
 ---
 
+## Quickstart
+
+```bash
+# 1. Install
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 2. Add API keys
+cp .env.example .env   # then fill in at least one LLM key + optional DISCOGS_TOKEN
+
+# 3. Run
+cp /path/to/rekordbox.xml import/rekordbox.xml
+python -m enricher
+```
+
+Import `export/rekordbox_export_YYYY-MM-DD.xml` back into Rekordbox. Done.
+
+---
+
 ## Why
 
 Rekordbox has no bulk metadata lookup. Filling Label, Year, and Remixer by hand across thousands of tracks takes hours and stays wrong as your library grows. This tool does it in one command — pulling from MusicBrainz and Discogs, resolving ambiguous matches with an LLM, and writing only the tracks that changed back into Rekordbox.
 
 ---
 
-## What's new in v0.5.0
+## [What's new in v0.5.0](https://github.com/christophechang/rekordbox-meta-data-enrichment/releases/tag/v0.5.0)
 
 - **Cache hit reporting.** Cache hits are now tracked per-decision and surfaced in both the live progress display and the final enrichment report — so you can see exactly how much work the cache saved on each run.
 
-## What's new in v0.4.0
+## [What's new in v0.4.0](https://github.com/christophechang/rekordbox-meta-data-enrichment/releases/tag/v0.4.0)
 
 - **Artist Presents X stripping.** Title strings like `(Aphex Twin Presents Caustic Window)` are cleaned before lookup, removing a common source of false negatives on artist-presented releases.
 - **ft./feat./presents in artist lookup.** The primary artist extraction now correctly handles `ft.`, `feat.`, and `presents` separators, preventing featured artists from polluting the MusicBrainz and Discogs queries.
 
-## What's new in v0.3.0
+## [What's new in v0.3.0](https://github.com/christophechang/rekordbox-meta-data-enrichment/releases/tag/v0.3.0)
 
 - **BPM-filtered Discogs styles in Mix field.** Relevant Discogs genre/style tags (e.g. `Techno`, `Deep House`) are written to the `Mix` field when no mix designator is present, giving untagged tracks a genre anchor.
 - **Prefer original MB release.** MusicBrainz candidate selection now ranks original releases above compilations, remasters, and re-issues, reducing the frequency of incorrect year and label values.
 
-## What's new in v0.2.0
+## [What's new in v0.2.0](https://github.com/christophechang/rekordbox-meta-data-enrichment/releases/tag/v0.2.0)
 
 - **Fixed Discogs Format → Mix pollution.** Discogs `Format` descriptions (e.g. `12"`, `EP`) were leaking into the `Mix` field. These are now filtered out at extraction time.
 - **Fixed `--full-export` COLLECTION gap.** Tracks in the Rekordbox `COLLECTION` node that were not part of any playlist were being silently dropped from full exports. All tracks are now included.
