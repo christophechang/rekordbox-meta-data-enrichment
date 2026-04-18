@@ -133,7 +133,10 @@ async def run(args: argparse.Namespace) -> None:
             cache.flush()
             enriched_from_cache = sum(1 for d in decisions if d.status == "enriched" and d.cache_hit)
             enriched_live = sum(1 for d in decisions if d.status == "enriched" and not d.cache_hit)
-            print(f"Progress: {i}/{total} | enriched: {enriched_from_cache + enriched_live} (live: {enriched_live}, cached: {enriched_from_cache})", file=sys.stderr)
+            print(
+                f"Progress: {i}/{total} | enriched: {enriched_from_cache + enriched_live} (live: {enriched_live}, cached: {enriched_from_cache})",
+                file=sys.stderr,
+            )
 
     cache.flush()
 

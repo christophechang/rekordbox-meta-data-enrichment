@@ -34,7 +34,9 @@ def build_report(decisions: list[EnrichmentDecision]) -> str:
     lines.append(f"  Total tracks processed : {len(decisions)}")
     enriched_live = [d for d in enriched if not d.cache_hit]
     enriched_cached = [d for d in enriched if d.cache_hit]
-    lines.append(f"  Enriched               : {len(enriched)} (live: {len(enriched_live)}, cached: {len(enriched_cached)})")
+    lines.append(
+        f"  Enriched               : {len(enriched)} (live: {len(enriched_live)}, cached: {len(enriched_cached)})"
+    )
     lines.append(f"  Already complete       : {len(already_done)}")
     lines.append(f"  Skipped (low conf.)    : {len(low_conf)}")
     lines.append(f"  Skipped (no match)     : {len(no_match)}")
