@@ -1,9 +1,18 @@
 # Rekordbox Metadata Enrichment
 
+[![CI](https://github.com/christophechang/rekordbox-meta-data-enrichment/actions/workflows/ci.yml/badge.svg)](https://github.com/christophechang/rekordbox-meta-data-enrichment/actions/workflows/ci.yml)
 [![GitHub release](https://img.shields.io/github/v/release/christophechang/rekordbox-meta-data-enrichment)](https://github.com/christophechang/rekordbox-meta-data-enrichment/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> Tag your library once. Never manually fill Label, Year, or Remixer again.
+
 Enriches a Rekordbox XML library export with release metadata (label, year, remixer, album, mix) sourced from MusicBrainz and Discogs. Outputs a delta XML containing only updated tracks, ready to re-import into Rekordbox.
+
+---
+
+## Why
+
+Rekordbox has no bulk metadata lookup. Filling Label, Year, and Remixer by hand across thousands of tracks takes hours and stays wrong as your library grows. This tool does it in one command — pulling from MusicBrainz and Discogs, resolving ambiguous matches with an LLM, and writing only the tracks that changed back into Rekordbox.
 
 ---
 
@@ -39,6 +48,40 @@ Enriches a Rekordbox XML library export with release metadata (label, year, remi
 **Fields enriched:** `Label`, `Year`, `Remixer`, `Album`, `Mix`
 
 **Fields never touched:** `Name`, `Artist`, `Genre`, `AverageBpm`, `Tonality`, `Comments`, `TotalTime`
+
+### Example output
+
+```
+$ python -m enricher --limit 20
+
+Processing 20 tracks...
+████████████████████ 20/20  [cache: 12 hits]
+
+── Enrichment Report ────────────────────────────────────────
+Enriched            14    (12 from cache, 2 new)
+Already complete     2
+Low confidence       1
+No match             2
+Errors               1
+
+LLM disambiguation   3 calls  (MiniMax: 2, Groq: 1)
+
+── Changes ──────────────────────────────────────────────────
+Aphex Twin – Windowlicker
+  Label:   —  →  Warp Records
+  Year:    —  →  1999
+  Remixer: —  →  Aphex Twin
+
+Bicep – Glue
+  Label:   —  →  Ninja Tune
+  Year:    —  →  2017
+
+... 12 more
+
+── Unable to Enrich ─────────────────────────────────────────
+DJ Shadow – Midnight In A Perfect World  (low confidence: 0.71)
+Unknown Artist – Track 04
+```
 
 ---
 
