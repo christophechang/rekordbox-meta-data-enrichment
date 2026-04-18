@@ -1,10 +1,30 @@
-<<<<<<< HEAD
-# rekordbox-meta-data-enrichment
-Tool to enrich Rekordbox xml export files with meta data
-=======
 # Rekordbox Metadata Enrichment
 
+[![GitHub release](https://img.shields.io/github/v/release/christophechang/rekordbox-meta-data-enrichment)](https://github.com/christophechang/rekordbox-meta-data-enrichment/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Enriches a Rekordbox XML library export with release metadata (label, year, remixer, album, mix) sourced from MusicBrainz and Discogs. Outputs a delta XML containing only updated tracks, ready to re-import into Rekordbox.
+
+---
+
+## What's new in v0.5.0
+
+- **Cache hit reporting.** Cache hits are now tracked per-decision and surfaced in both the live progress display and the final enrichment report — so you can see exactly how much work the cache saved on each run.
+
+## What's new in v0.4.0
+
+- **Artist Presents X stripping.** Title strings like `(Aphex Twin Presents Caustic Window)` are cleaned before lookup, removing a common source of false negatives on artist-presented releases.
+- **ft./feat./presents in artist lookup.** The primary artist extraction now correctly handles `ft.`, `feat.`, and `presents` separators, preventing featured artists from polluting the MusicBrainz and Discogs queries.
+
+## What's new in v0.3.0
+
+- **BPM-filtered Discogs styles in Mix field.** Relevant Discogs genre/style tags (e.g. `Techno`, `Deep House`) are written to the `Mix` field when no mix designator is present, giving untagged tracks a genre anchor.
+- **Prefer original MB release.** MusicBrainz candidate selection now ranks original releases above compilations, remasters, and re-issues, reducing the frequency of incorrect year and label values.
+
+## What's new in v0.2.0
+
+- **Fixed Discogs Format → Mix pollution.** Discogs `Format` descriptions (e.g. `12"`, `EP`) were leaking into the `Mix` field. These are now filtered out at extraction time.
+- **Fixed `--full-export` COLLECTION gap.** Tracks in the Rekordbox `COLLECTION` node that were not part of any playlist were being silently dropped from full exports. All tracks are now included.
 
 ---
 
@@ -41,9 +61,12 @@ Pass `--no-colour-confidence` to skip low-confidence matches entirely and only a
 
 **Requirements:** Python 3.12+
 
+macOS ships with Python 3.9. You likely need to use your Homebrew Python explicitly. Check with `which python3.13` or `which python3.12` and substitute below:
+
 ```bash
-python -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
@@ -203,6 +226,7 @@ A `Updated Tracks` playlist is included in the export. After importing into Reko
 The enrichment report (printed to stdout or `--report` file) includes:
 
 - Summary counts (enriched / already complete / low confidence / no match / errors)
+- Cache hit count
 - LLM disambiguation call counts per provider
 - Per-track field changes for enriched tracks
 - Unresolved tracks for manual review
@@ -256,4 +280,3 @@ src/enricher/
 ├── writer.py         Enriched delta XML output
 └── reporter.py       Enrichment report generator
 ```
->>>>>>> 884f47a (Initial commit — Rekordbox Metadata Enrichment CLI)
