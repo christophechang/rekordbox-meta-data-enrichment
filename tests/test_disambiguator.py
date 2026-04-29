@@ -41,41 +41,41 @@ _CANDIDATES = [
 ]
 
 
-def _minimax_ok_response(index: int) -> Response:
+def _llm_ok_response(index: int) -> Response:
     body = {"choices": [{"message": {"content": json.dumps({"index": index})}}]}
     return Response(200, content=json.dumps(body).encode())
 
 
-def _minimax_uncertain_response() -> Response:
+def _llm_uncertain_response() -> Response:
     body = {"choices": [{"message": {"content": json.dumps({"index": -1})}}]}
     return Response(200, content=json.dumps(body).encode())
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_disambiguate_returns_minimax_choice(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
-    respx.post("https://api.minimaxi.chat/v1/text/chatcompletion_v2").mock(return_value=_minimax_ok_response(0))
+async def test_disambiguate_returns_mistral_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    respx.post("https://api.mistral.ai/v1/chat/completions").mock(return_value=_llm_ok_response(0))
     idx, provider = await disambiguate(_TRACK, _CANDIDATES)
     assert idx == 0
-    assert provider == "minimax"
+    assert provider == "mistral"
 
 
 @pytest.mark.asyncio
 @respx.mock
 async def test_disambiguate_returns_minus1_when_uncertain(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
-    respx.post("https://api.minimaxi.chat/v1/text/chatcompletion_v2").mock(return_value=_minimax_uncertain_response())
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
+    respx.post("https://api.mistral.ai/v1/chat/completions").mock(return_value=_llm_uncertain_response())
     idx, provider = await disambiguate(_TRACK, _CANDIDATES)
     assert idx == -1
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_disambiguate_falls_back_to_groq_when_minimax_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+async def test_disambiguate_falls_back_to_groq_when_mistral_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
-    respx.post("https://api.groq.com/openai/v1/chat/completions").mock(return_value=_minimax_ok_response(1))
+    respx.post("https://api.groq.com/openai/v1/chat/completions").mock(return_value=_llm_ok_response(1))
     idx, provider = await disambiguate(_TRACK, _CANDIDATES)
     assert idx == 1
     assert provider == "groq"
@@ -83,7 +83,7 @@ async def test_disambiguate_falls_back_to_groq_when_minimax_missing(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_disambiguate_returns_minus1_when_no_providers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     idx, provider = await disambiguate(_TRACK, _CANDIDATES)

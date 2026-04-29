@@ -50,9 +50,9 @@ def test_report_summary_counts_are_correct() -> None:
 
 
 def test_report_shows_llm_provider_when_used() -> None:
-    decisions = [_enriched(provider="minimax")]
+    decisions = [_enriched(provider="mistral")]
     report = build_report(decisions)
-    assert "minimax" in report
+    assert "mistral" in report
 
 
 def test_report_shows_enriched_fields() -> None:

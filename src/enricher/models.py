@@ -48,7 +48,7 @@ class EnrichmentDecision(BaseModel):
     ]
     match: CandidateMatch | None = None
     fields_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)
-    disambiguation_used: Literal["minimax", "groq", "gemini"] | None = None
+    disambiguation_used: Literal["mistral", "groq", "gemini"] | None = None
     confidence_colour: str | None = None  # set when --colour-confidence is active
     clear_colour: bool = False  # explicitly blank the Colour field (no usable match in colour-confidence mode)
     cache_hit: bool = False  # True when result was served from cache, not a live API call

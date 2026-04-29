@@ -60,7 +60,7 @@ Rekordbox has no bulk metadata lookup. Filling Label, Year, and Remixer by hand 
 
 - Reads your Rekordbox XML export (`File > Export Collection in xml format`)
 - Looks up each track against MusicBrainz (primary) and Discogs (secondary)
-- Uses LLM disambiguation (MiniMax → Groq → Gemini cascade) for ambiguous matches
+- Uses LLM disambiguation (Mistral → Groq → Gemini cascade) for ambiguous matches
 - Writes an enriched XML containing only the tracks that changed
 - Colour-codes tracks in Rekordbox by match confidence for easy review
 
@@ -83,7 +83,7 @@ Low confidence       1
 No match             2
 Errors               1
 
-LLM disambiguation   3 calls  (MiniMax: 2, Groq: 1)
+LLM disambiguation   3 calls  (Mistral: 2, Groq: 1)
 
 ── Changes ──────────────────────────────────────────────────
 Aphex Twin – Windowlicker
@@ -140,7 +140,7 @@ cp .env.example .env
 
 ```
 # LLM disambiguation — provider cascade (first available is used)
-MINIMAX_API_KEY=
+MISTRAL_API_KEY=
 GROQ_API_KEY=
 GEMINI_API_KEY=
 
@@ -149,7 +149,7 @@ GEMINI_API_KEY=
 DISCOGS_TOKEN=
 ```
 
-At least one LLM key is required for disambiguation. MiniMax is preferred (flat-fee subscription). Groq and Gemini have free tiers.
+At least one LLM key is required for disambiguation. Mistral is preferred. Groq and Gemini have free tiers.
 
 ---
 
@@ -259,7 +259,7 @@ score = artist_similarity (0–0.40)
 
 When candidates cluster in the 0.65–0.85 band, an LLM is asked to pick the best match given the track's genre, BPM and Camelot key. Provider cascade:
 
-1. **MiniMax** (preferred — flat-fee subscription)
+1. **Mistral** (`mistral-small-latest`)
 2. **Groq** (llama-3.3-70b, free tier)
 3. **Gemini 2.5 Flash** (free tier)
 
@@ -336,7 +336,7 @@ src/enricher/
 ├── reader.py         Rekordbox XML parser
 ├── lookup.py         MusicBrainz + Discogs async lookups with rate limiting
 ├── scorer.py         Confidence scoring algorithm
-├── disambiguator.py  LLM disambiguation (MiniMax → Groq → Gemini cascade)
+├── disambiguator.py  LLM disambiguation (Mistral → Groq → Gemini cascade)
 ├── enricher.py       Per-track pipeline orchestration
 ├── cache.py          Persistent JSON cache
 ├── writer.py         Enriched delta XML output

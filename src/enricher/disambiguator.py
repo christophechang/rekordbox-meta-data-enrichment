@@ -9,7 +9,7 @@ import httpx
 
 from enricher.models import CandidateMatch, TrackRecord
 
-DisambigProvider = Literal["minimax", "groq", "gemini"]
+DisambigProvider = Literal["mistral", "groq", "gemini"]
 
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
@@ -81,17 +81,16 @@ async def _call_openai_compat(
         return _strip_thinking(str(resp.json()["choices"][0]["message"]["content"]))
 
 
-async def _try_minimax(prompt: str) -> str | None:
-    api_key = os.environ.get("MINIMAX_API_KEY", "")
+async def _try_mistral(prompt: str) -> str | None:
+    api_key = os.environ.get("MISTRAL_API_KEY", "")
     if not api_key:
         return None
     try:
         return await _call_openai_compat(
-            "https://api.minimaxi.chat",
+            "https://api.mistral.ai",
             api_key,
-            "MiniMax-M2",
+            "mistral-small-latest",
             prompt,
-            path="/v1/text/chatcompletion_v2",
             timeout=30,
         )
     except Exception:
@@ -140,9 +139,9 @@ async def disambiguate(
 
     prompt = _build_prompt(track, candidates)
 
-    raw = await _try_minimax(prompt)
+    raw = await _try_mistral(prompt)
     if raw is not None:
-        return _parse_index(raw, len(candidates)), "minimax"
+        return _parse_index(raw, len(candidates)), "mistral"
 
     raw = await _try_groq(prompt)
     if raw is not None:

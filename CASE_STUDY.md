@@ -40,7 +40,7 @@ At a high level, the pipeline for each track is:
 9. Apply confidence colour
 10. Export only changed tracks
 
-LLM disambiguation follows the same conventions as MixLab and TuneFinder. MiniMax is preferred first, then Groq, then Gemini. The model is used only to resolve ambiguity between grounded candidate matches. If it cannot make a confident decision, the track is left unenriched rather than guessed at.
+LLM disambiguation follows the same conventions as MixLab and TuneFinder. Mistral is preferred first, then Groq, then Gemini. The model is used only to resolve ambiguity between grounded candidate matches. If it cannot make a confident decision, the track is left unenriched rather than guessed at.
 
 ---
 
