@@ -4,6 +4,8 @@
 [![GitHub release](https://img.shields.io/github/v/release/christophechang/rekordbox-meta-data-enrichment)](https://github.com/christophechang/rekordbox-meta-data-enrichment/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> This project explores AI-assisted development workflows. My focus here was system design and delivery rather than idiomatic Python, which is not my primary stack.
+
 > Tag your library once. Never manually fill Label, Year, or Remixer again.
 
 Enriches a Rekordbox XML library export with release metadata (label, year, remixer, album, mix) sourced from MusicBrainz and Discogs. Outputs a delta XML containing only updated tracks, ready to re-import into Rekordbox.
