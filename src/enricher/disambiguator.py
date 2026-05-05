@@ -9,7 +9,7 @@ import httpx
 
 from enricher.models import CandidateMatch, TrackRecord
 
-DisambigProvider = Literal["mistral", "groq", "gemini"]
+DisambigProvider = Literal["mistral", "groq", "gemini", "openrouter"]
 
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
@@ -65,8 +65,11 @@ async def _call_openai_compat(
     prompt: str,
     path: str = "/v1/chat/completions",
     timeout: int = 30,
+    extra_headers: dict[str, str] | None = None,
 ) -> str:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
     payload = {
         "model": model,
         "messages": [
@@ -129,6 +132,23 @@ async def _try_gemini(prompt: str) -> str | None:
         return None
 
 
+async def _try_openrouter(prompt: str, model: str) -> str | None:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        return await _call_openai_compat(
+            "https://openrouter.ai/api",
+            api_key,
+            model,
+            prompt,
+            extra_headers={"HTTP-Referer": "https://openclaw.local"},
+            timeout=30,
+        )
+    except Exception:
+        return None
+
+
 async def disambiguate(
     track: TrackRecord,
     candidates: list[CandidateMatch],
@@ -150,5 +170,13 @@ async def disambiguate(
     raw = await _try_gemini(prompt)
     if raw is not None:
         return _parse_index(raw, len(candidates)), "gemini"
+
+    raw = await _try_openrouter(prompt, "openrouter/free")
+    if raw is not None:
+        return _parse_index(raw, len(candidates)), "openrouter"
+
+    raw = await _try_openrouter(prompt, "mistralai/mistral-small")
+    if raw is not None:
+        return _parse_index(raw, len(candidates)), "openrouter"
 
     return -1, None
