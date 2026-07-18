@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 import respx
+from factories import _track
 from httpx import Response
 
-from enricher.lookup import _primary_artist, _strip_mix_designators, lookup_discogs, lookup_musicbrainz
+from enricher.lookup import (
+    SourceLookupError,
+    _escape_lucene,
+    _primary_artist,
+    _strip_mix_designators,
+    lookup_discogs,
+    lookup_musicbrainz,
+)
 from enricher.models import TrackRecord
 
 _TRACK = TrackRecord(
@@ -25,15 +34,28 @@ _MB_RESPONSE = {
             "id": "mb-abc-123",
             "title": "Some Track",
             "length": 360000,
+            "first-release-date": "2021-05-01",
             "artist-credit": [{"artist": {"name": "DJ Example"}}],
+            # Realistic: release stubs have title/date/release-group but NO label-info, NO relations
             "releases": [
-                {
-                    "title": "Some Album",
-                    "date": "2021-05-01",
-                    "label-info": [{"label": {"name": "Defected"}}],
-                }
+                {"title": "Some Album", "date": "2021-05-01", "release-group": {"secondary-types": []}},
             ],
-            "relations": [{"type": "remixer", "artist": {"name": "Remixer X"}}],
+        }
+    ]
+}
+
+_MB_SEARCH_RESPONSE = {
+    "recordings": [
+        {
+            "id": "mbid-1",
+            "title": "Ladbroke Grove",
+            "length": 372000,
+            "first-release-date": "1997-06-02",
+            "artist-credit": [{"artist": {"name": "Kerri Chandler"}}],
+            # Realistic: release stubs have title/date/release-group but NO label-info, NO relations
+            "releases": [
+                {"title": "Hemisphere", "date": "1997-06-02", "release-group": {"secondary-types": []}},
+            ],
         }
     ]
 }
@@ -60,19 +82,19 @@ async def test_lookup_musicbrainz_returns_candidates() -> None:
     candidates = await lookup_musicbrainz(_TRACK)
     assert len(candidates) == 1
     assert candidates[0].source == "musicbrainz"
-    assert candidates[0].label == "Defected"
+    assert candidates[0].label == ""  # search cannot supply labels — detail lookup does (Task 5)
     assert candidates[0].year == "2021"
-    assert candidates[0].remixer == "Remixer X"
+    assert candidates[0].remixer == ""
     assert candidates[0].album == "Some Album"
     assert candidates[0].duration_seconds == 360
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_lookup_musicbrainz_returns_empty_on_error() -> None:
+async def test_lookup_musicbrainz_raises_on_http_error() -> None:
     respx.get("https://musicbrainz.org/ws/2/recording/").mock(return_value=Response(500))
-    candidates = await lookup_musicbrainz(_TRACK)
-    assert candidates == []
+    with pytest.raises(SourceLookupError):
+        await lookup_musicbrainz(_TRACK)
 
 
 @pytest.mark.asyncio
@@ -115,35 +137,31 @@ async def test_lookup_discogs_extracts_style_tags() -> None:
 @pytest.mark.asyncio
 @respx.mock
 async def test_lookup_musicbrainz_prefers_non_compilation_release() -> None:
-    """MB should pick the non-compilation release for label/year even if it appears later."""
+    """MB should pick the non-compilation release for album even if it appears later.
+
+    label-info is omitted (search responses never carry it — realistic shape); year is
+    independently sourced from the recording-level first-release-date, not any release date.
+    """
     response = {
         "recordings": [
             {
                 "id": "mb-001",
                 "title": "Some Track",
                 "length": 360000,
+                "first-release-date": "2018-03-10",
                 "artist-credit": [{"artist": {"name": "DJ Example"}}],
                 "releases": [
                     {
                         "title": "Ministry of Sound Compilation",
                         "date": "2019",
-                        "label-info": [{"label": {"name": "Ministry of Sound"}}],
-                        "release-group": {
-                            "primary-type": "Album",
-                            "secondary-types": ["Compilation"],
-                        },
+                        "release-group": {"secondary-types": ["Compilation"]},
                     },
                     {
                         "title": "Original EP",
                         "date": "2018",
-                        "label-info": [{"label": {"name": "Defected"}}],
-                        "release-group": {
-                            "primary-type": "EP",
-                            "secondary-types": [],
-                        },
+                        "release-group": {"secondary-types": []},
                     },
                 ],
-                "relations": [],
             }
         ]
     }
@@ -151,7 +169,7 @@ async def test_lookup_musicbrainz_prefers_non_compilation_release() -> None:
         return_value=Response(200, content=json.dumps(response).encode())
     )
     candidates = await lookup_musicbrainz(_TRACK)
-    assert candidates[0].label == "Defected"
+    assert candidates[0].label == ""
     assert candidates[0].year == "2018"
     assert candidates[0].album == "Original EP"
 
@@ -185,6 +203,76 @@ async def test_lookup_discogs_returns_empty_on_error() -> None:
     respx.get("https://api.discogs.com/database/search").mock(return_value=Response(429))
     candidates = await lookup_discogs(_TRACK, token=None)
     assert candidates == []
+
+
+# ---------------------------------------------------------------------------
+# MB search repairs: no-op inc param dropped, Lucene escaping, honest rate
+# limit, and SourceLookupError surfaced on HTTP failure (Task 4)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_mb_year_comes_from_first_release_date() -> None:
+    respx.get("https://musicbrainz.org/ws/2/recording/").respond(json=_MB_SEARCH_RESPONSE)
+    track = _track(name="Ladbroke Grove", artist="Kerri Chandler")
+    results = await lookup_musicbrainz(track)
+    assert results[0].year == "1997"
+    assert results[0].label == ""  # search cannot supply labels — detail lookup does (Task 5)
+    assert results[0].remixer == ""
+
+
+@respx.mock
+async def test_mb_search_sends_no_inc_param_and_escapes_lucene() -> None:
+    route = respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})
+    track = _track(name='Who"s Afraid (2:1)', artist="John Tejada")
+    await lookup_musicbrainz(track)
+    sent = route.calls[0].request.url
+    assert "inc=" not in str(sent)
+    assert '\\"' in httpx.URL(sent).params["query"] or "\\:" in httpx.URL(sent).params["query"]
+
+
+@respx.mock
+async def test_mb_http_error_raises_source_lookup_error() -> None:
+    respx.get("https://musicbrainz.org/ws/2/recording/").respond(status_code=400)
+    with pytest.raises(SourceLookupError) as exc_info:
+        await lookup_musicbrainz(_track(name="X", artist="Y"))
+    assert exc_info.value.source == "musicbrainz"
+
+
+@respx.mock
+async def test_mb_503_retries_then_succeeds() -> None:
+    route = respx.get("https://musicbrainz.org/ws/2/recording/")
+    route.side_effect = [
+        httpx.Response(503, headers={"Retry-After": "0"}),
+        httpx.Response(200, json=_MB_SEARCH_RESPONSE),
+    ]
+    results = await lookup_musicbrainz(_track(name="Ladbroke Grove", artist="Kerri Chandler"))
+    assert results and results[0].year == "1997"
+
+
+@respx.mock
+async def test_mb_fallback_ladder_fires_in_order() -> None:
+    # Spec §7: attempts 1→2→3 with (full artist, clean title) → (primary artist, clean title)
+    # → (primary artist, designator-stripped title), each firing only on empty results.
+    #
+    # NOTE: brief used "(Calibre Remix)" as the third-rung designator, but the
+    # `(Artist Remix)` pattern is added to _MIX_DESIGNATOR_RE in Task 6 ("Matching
+    # fixes" — see docs/superpowers/specs/2026-07-18-enrich-in-transit-design.md §4.6),
+    # not here. "(Extended Mix)" already strips under the current regex, so it exercises
+    # the same three-rung cascade without depending on unimplemented Task 6 behaviour.
+    route = respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})
+    track = _track(name="Fall Down (Extended Mix)", artist="Roni Size & Krust")
+    await lookup_musicbrainz(track)
+    queries = [httpx.URL(c.request.url).params["query"] for c in route.calls]
+    assert len(queries) == 3
+    assert "Krust" in queries[0]
+    assert "Krust" not in queries[1] and "Roni Size" in queries[1]
+    assert "Extended" not in queries[2] and "Fall Down" in queries[2]
+
+
+def test_escape_lucene() -> None:
+    assert _escape_lucene('Who"s Afraid') == 'Who\\"s Afraid'
+    assert _escape_lucene("a+b(c)") == "a\\+b\\(c\\)"
 
 
 # ---------------------------------------------------------------------------

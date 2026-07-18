@@ -7,6 +7,15 @@ import httpx
 
 from enricher.models import CandidateMatch, TrackRecord
 
+
+class SourceLookupError(Exception):
+    """A metadata source failed at the HTTP level. Never cached; surfaces as skipped_api_error."""
+
+    def __init__(self, source: str, detail: str) -> None:
+        self.source = source
+        super().__init__(f"{source}: {detail}")
+
+
 _MB_BASE = "https://musicbrainz.org/ws/2"
 _DISCOGS_BASE = "https://api.discogs.com"
 _USER_AGENT = "RekordboxEnricher/0.1 ( https://github.com/christophechang/rekordbox-meta-data-enrichment )"
@@ -16,8 +25,9 @@ _DISCOGS_SEMAPHORE: asyncio.Semaphore | None = None
 
 _MAX_CANDIDATES = 5
 
-# MusicBrainz: 3 req/sec with User-Agent header — stay comfortably under
-_MB_DELAY = 0.34  # ~2.9 req/sec
+# MusicBrainz policy: max 1 request/second per client. Stay under it.
+_MB_DELAY = 1.1
+_MB_RETRIES = 3
 
 # Discogs: 60 req/min authenticated, 25 req/min unauthenticated
 # Semaphore(1) serialises requests so each delay is meaningful (no burst)
@@ -56,6 +66,9 @@ _MIX_DESIGNATOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches Lucene special characters that must be backslash-escaped in MusicBrainz queries
+_LUCENE_SPECIALS = re.compile(r'(&&|\|\||[+\-!(){}\[\]^"~*?:\\/])')
+
 
 def _clean_title(title: str) -> str:
     """Strip known query-breaking artefacts from a title before sending to APIs."""
@@ -67,6 +80,10 @@ def _clean_title(title: str) -> str:
 def _strip_mix_designators(title: str) -> str:
     """Remove mix/version/feat qualifiers — DBs often index the bare track name."""
     return _MIX_DESIGNATOR_RE.sub("", title).strip()
+
+
+def _escape_lucene(text: str) -> str:
+    return _LUCENE_SPECIALS.sub(r"\\\1", text)
 
 
 def _primary_artist(artist: str) -> str:
@@ -94,10 +111,10 @@ def _discogs_headers(token: str | None) -> dict[str, str]:
 
 
 def _best_mb_release(releases: list[object]) -> dict[str, object] | None:
-    """Pick the most useful release for label/year/album metadata.
+    """Pick the most useful release for album metadata.
 
-    Prefers non-compilation, non-DJ-mix releases (so we get the original label rather
-    than a compilation imprint), then breaks ties by earliest release date.
+    Prefers non-compilation, non-DJ-mix releases (so we get the original release rather
+    than a compilation reissue), then breaks ties by earliest release date.
     """
     valid = [r for r in releases if isinstance(r, dict)]
     if not valid:
@@ -139,36 +156,19 @@ def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
                 if isinstance(artist_obj, dict):
                     artist = str(artist_obj.get("name", ""))
 
-        # Pull label, year, album from best release (prefer non-compilation, then earliest)
-        label = ""
-        year = ""
+        # Year comes from the recording-level first-release-date — the true
+        # original-release year. Never from a release stub's own date, which
+        # reflects that specific pressing, not the recording's original release.
+        year = str(rec.get("first-release-date", "") or "")[:4]
+
+        # Pull album from best release (prefer non-compilation, then earliest).
+        # Search responses never carry label-info/relations, so label/remixer
+        # stay blank here — Task 5's recording-detail lookup fills them in.
         album = ""
         releases = rec.get("releases", [])
         best_release = _best_mb_release(releases if isinstance(releases, list) else [])
         if best_release is not None:
             album = str(best_release.get("title", ""))
-            date_raw = best_release.get("date", "")
-            year = str(date_raw)[:4] if date_raw else ""
-            label_info = best_release.get("label-info", [])
-            if isinstance(label_info, list) and label_info:
-                first_label = label_info[0]
-                if isinstance(first_label, dict):
-                    label_obj = first_label.get("label", {})
-                    if isinstance(label_obj, dict):
-                        label = str(label_obj.get("name", ""))
-
-        # Extract remixer from relations
-        remixer = ""
-        relations = rec.get("relations", [])
-        if isinstance(relations, list):
-            for rel in relations:
-                if not isinstance(rel, dict):
-                    continue
-                if str(rel.get("type", "")).lower() == "remixer":
-                    artist_obj = rel.get("artist", {})
-                    if isinstance(artist_obj, dict):
-                        remixer = str(artist_obj.get("name", ""))
-                        break
 
         candidates.append(
             CandidateMatch(
@@ -176,9 +176,9 @@ def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
                 source_id=str(rec.get("id", "")),
                 artist=artist,
                 title=title,
-                label=label,
+                label="",
                 year=year,
-                remixer=remixer,
+                remixer="",
                 album=album,
                 mix="",
                 duration_seconds=duration_seconds,
@@ -188,23 +188,23 @@ def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
 
 
 async def _mb_query(artist: str, title: str) -> list[CandidateMatch]:
-    query = f'artist:"{artist}" AND recording:"{title}"'
-    params = {
-        "query": query,
-        "fmt": "json",
-        "limit": str(_MAX_CANDIDATES),
-        "inc": "releases labels artist-credits relations",
-    }
+    query = f'artist:"{_escape_lucene(artist)}" AND recording:"{_escape_lucene(title)}"'
+    params = {"query": query, "fmt": "json", "limit": str(_MAX_CANDIDATES)}
     async with _get_mb_semaphore():
-        await asyncio.sleep(_MB_DELAY)
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.get(f"{_MB_BASE}/recording/", params=params, headers=_mb_headers())
+        for attempt in range(_MB_RETRIES):
+            await asyncio.sleep(_MB_DELAY)
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.get(f"{_MB_BASE}/recording/", params=params, headers=_mb_headers())
+                if resp.status_code == 503:
+                    await asyncio.sleep(float(resp.headers.get("Retry-After", 2**attempt)))
+                    continue
                 resp.raise_for_status()
                 data: dict[str, object] = resp.json()
                 return _extract_mb_candidates(data)
-        except Exception:
-            return []
+            except httpx.HTTPError as exc:
+                raise SourceLookupError("musicbrainz", str(exc)) from exc
+    raise SourceLookupError("musicbrainz", f"still rate-limited after {_MB_RETRIES} attempts")
 
 
 async def lookup_musicbrainz(track: TrackRecord) -> list[CandidateMatch]:
