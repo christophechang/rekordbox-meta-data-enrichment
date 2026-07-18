@@ -271,31 +271,43 @@ async def test_mb_fallback_ladder_fires_in_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MB recording-detail follow-up: label/remixer restored via the lookup
-# endpoint, since search responses never carry them (Task 5)
+# MB recording-detail follow-up: the remixer is restored via the lookup
+# endpoint's artist relations, since search responses never carry them (Task 5).
+# `labels` is a release-only include — requesting it on /recording returns 400 —
+# so label is left to Discogs and this call soft-fails as a refinement.
 # ---------------------------------------------------------------------------
 
 _MB_DETAIL_RESPONSE = {
     "id": "mbid-1",
     "title": "Ladbroke Grove",
-    "releases": [
-        {
-            "title": "Hemisphere",
-            "date": "1997-06-02",
-            "release-group": {"secondary-types": []},
-            "label-info": [{"label": {"name": "Shelter Records"}}],
-        }
-    ],
     "relations": [{"type": "remixer", "artist": {"name": "DJ Deep"}}],
 }
 
 
 @respx.mock
-async def test_mb_recording_details_extracts_label_and_remixer() -> None:
+async def test_mb_recording_details_extracts_remixer() -> None:
     respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
-    label, remixer = await mb_recording_details("mbid-1")
-    assert label == "Shelter Records"
+    remixer = await mb_recording_details("mbid-1")
     assert remixer == "DJ Deep"
+
+
+@respx.mock
+async def test_mb_recording_details_requests_artist_rels_only() -> None:
+    # Regression: `labels` is release-only and 400s on /recording. The detail call
+    # must request inc=artist-rels and never labels.
+    route = respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    await mb_recording_details("mbid-1")
+    sent = str(route.calls[0].request.url)
+    assert "inc=artist-rels" in sent
+    assert "labels" not in sent
+
+
+@respx.mock
+async def test_mb_recording_details_soft_fails_on_http_error() -> None:
+    # Regression: a detail-lookup failure is a refinement miss, not a track-killing
+    # error — it must return "" so the caller keeps its already-scored candidates.
+    respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(status_code=400)
+    assert await mb_recording_details("mbid-1") == ""
 
 
 def test_escape_lucene() -> None:

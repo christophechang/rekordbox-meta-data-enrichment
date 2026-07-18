@@ -237,13 +237,18 @@ async def lookup_musicbrainz(track: TrackRecord) -> list[CandidateMatch]:
     return results
 
 
-async def mb_recording_details(mbid: str) -> tuple[str, str]:
-    """Fetch (label, remixer) via the recording lookup endpoint.
+async def mb_recording_details(mbid: str) -> str:
+    """Fetch the remixer via the recording lookup endpoint's artist relations.
 
-    Search responses never include label-info or relations; only this endpoint does.
-    NOTE: inc values are '+'-separated and must not be URL-encoded to %2B — build the URL directly.
+    Only relationship data (`inc=artist-rels`) is available on a recording — `labels`
+    is a release-only include and returns 400 here, so a track's label is left to
+    Discogs (which owns electronic-music imprints anyway). This is a refinement, not a
+    primary lookup: it soft-fails to "" rather than raising, so a detail hiccup never
+    turns a good match into skipped_api_error.
+    NOTE: build the URL directly so the '+' in a multi-value inc is not %2B-encoded
+    (single value here, but keep the convention).
     """
-    url = f"{_MB_BASE}/recording/{mbid}?inc=releases+labels+artist-rels&fmt=json"
+    url = f"{_MB_BASE}/recording/{mbid}?inc=artist-rels&fmt=json"
     async with _get_mb_semaphore():
         await asyncio.sleep(_MB_DELAY)
         try:
@@ -251,31 +256,17 @@ async def mb_recording_details(mbid: str) -> tuple[str, str]:
                 resp = await client.get(url, headers=_mb_headers())
                 resp.raise_for_status()
                 data: dict[str, object] = resp.json()
-        except httpx.HTTPError as exc:
-            raise SourceLookupError("musicbrainz", str(exc)) from exc
+        except httpx.HTTPError:
+            return ""
 
-    label = ""
-    releases = data.get("releases", [])
-    best = _best_mb_release(releases if isinstance(releases, list) else [])
-    if best is not None:
-        label_info = best.get("label-info", [])
-        if isinstance(label_info, list) and label_info:
-            first = label_info[0]
-            if isinstance(first, dict):
-                label_obj = first.get("label", {})
-                if isinstance(label_obj, dict):
-                    label = str(label_obj.get("name", ""))
-
-    remixer = ""
     relations = data.get("relations", [])
     if isinstance(relations, list):
         for rel in relations:
             if isinstance(rel, dict) and str(rel.get("type", "")).lower() == "remixer":
                 artist_obj = rel.get("artist", {})
                 if isinstance(artist_obj, dict):
-                    remixer = str(artist_obj.get("name", ""))
-                    break
-    return label, remixer
+                    return str(artist_obj.get("name", ""))
+    return ""
 
 
 def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> list[CandidateMatch]:

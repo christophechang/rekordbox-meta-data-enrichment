@@ -60,7 +60,7 @@ async def test_process_track_enriches_on_high_confidence(tmp_path: Path) -> None
         with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
             mock_discogs.return_value = []
             with patch("enricher.enricher.mb_recording_details", new_callable=AsyncMock) as mock_detail:
-                mock_detail.return_value = ("", "")
+                mock_detail.return_value = ""
                 decision = await process_track(_make_track(), cache=cache)
     assert decision.status == "enriched"
     assert decision.fields_changed.get("label") == ("", "Defected")
@@ -96,7 +96,7 @@ async def test_process_track_uses_cache_on_second_call(tmp_path: Path) -> None:
         with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
             mock_discogs.return_value = []
             with patch("enricher.enricher.mb_recording_details", new_callable=AsyncMock) as mock_detail:
-                mock_detail.return_value = ("", "")
+                mock_detail.return_value = ""
                 await process_track(_make_track(), cache=cache)
                 await process_track(_make_track(), cache=cache)
     assert mock_mb.call_count == 1  # second call served from cache
@@ -140,7 +140,7 @@ async def test_process_track_no_llm_skips_low_confidence(tmp_path: Path) -> None
         with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
             mock_discogs.return_value = []
             with patch("enricher.enricher.mb_recording_details", new_callable=AsyncMock) as mock_detail:
-                mock_detail.return_value = ("", "")
+                mock_detail.return_value = ""
                 decision = await process_track(_make_track(), cache=cache, use_llm=False)
     assert decision.status in ("skipped_low_confidence", "skipped_no_match", "enriched")
 
@@ -169,38 +169,30 @@ _MB_SEARCH_RESPONSE = {
 _MB_DETAIL_RESPONSE = {
     "id": "mbid-1",
     "title": "Ladbroke Grove",
-    "releases": [
-        {
-            "title": "Hemisphere",
-            "date": "1997-06-02",
-            "release-group": {"secondary-types": []},
-            "label-info": [{"label": {"name": "Shelter Records"}}],
-        }
-    ],
     "relations": [{"type": "remixer", "artist": {"name": "DJ Deep"}}],
 }
 
 
 @respx.mock
-async def test_detail_lookup_only_fires_when_needed(tmp_path: Path) -> None:
-    # Winning MB candidate already satisfies the track's blank fields → no detail call.
+async def test_detail_lookup_only_fires_when_remixer_needed(tmp_path: Path) -> None:
+    # Track already carries a remixer → the detail (remixer) lookup is not called.
     respx.get("https://musicbrainz.org/ws/2/recording/").respond(json=_MB_SEARCH_RESPONSE)
     detail_route = respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
-    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="Already Set", year="", remixer="Set Too")
+    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="", year="", remixer="Set Too")
     cache = EnrichmentCache(tmp_path / "c.json")
     await process_track(track, cache=cache, sources="musicbrainz", use_llm=False, colour_confidence=True)
     assert not detail_route.called
 
 
 @respx.mock
-async def test_detail_result_is_cached_with_candidates(tmp_path: Path) -> None:
+async def test_detail_remixer_is_cached_with_candidates(tmp_path: Path) -> None:
     respx.get("https://musicbrainz.org/ws/2/recording/").respond(json=_MB_SEARCH_RESPONSE)
     respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
-    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="", year="")
+    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="", year="", remixer="")
     cache = EnrichmentCache(tmp_path / "c.json")
     await process_track(track, cache=cache, sources="musicbrainz", use_llm=False, colour_confidence=True)
     cached = cache.get("Kerri Chandler", "Ladbroke Grove")
-    assert cached is not None and cached[0].label == "Shelter Records"
+    assert cached is not None and cached[0].remixer == "DJ Deep"
 
 
 def test_fields_changed_fills_blank_fields_only() -> None:
