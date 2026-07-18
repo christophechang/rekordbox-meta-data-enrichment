@@ -137,6 +137,16 @@ def test_remix_re_strips_artist_remix_suffix() -> None:
     assert _strip_remix("Move Your Body (Shadow Child Extended Remix)") == "Move Your Body"
 
 
+def test_remix_re_ignores_keywords_inside_words() -> None:
+    # Substring false-positives: keyword fragments inside real words must not strip
+    assert _strip_remix("Track Name (Late Night Dublin)") == "Track Name (Late Night Dublin)"
+    assert _strip_remix("(Prefix Cut)") == "(Prefix Cut)"
+    assert _strip_remix("Song (Meditate Slowly)") == "Song (Meditate Slowly)"
+    # Real designators still strip
+    assert _strip_remix("Fall Down (Calibre Remix)") == "Fall Down"
+    assert _strip_remix("Song (Radio Edit)") == "Song"
+
+
 def test_artist_containment_requires_min_length() -> None:
     # "Ben" ⊂ "Benny Benassi" must NOT score as containment
     assert _artist_score("Ben", "Benny Benassi") < 0.35

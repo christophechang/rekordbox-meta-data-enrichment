@@ -8,8 +8,8 @@ from enricher.models import CandidateMatch, TrackRecord
 # Remix suffix patterns to strip when comparing titles
 _REMIX_RE = re.compile(
     r"\s*[\(\[][^\)\]]*"
-    r"(?:original|club|radio|extended|instrumental|dub|vocal|mix|edit|version|vip|reprise|"
-    r"bootleg|rework|refix|remix|remaster(?:ed)?|flip)"
+    r"\b(?:original|club|radio|extended|instrumental|dub|vocal|mix|edit|version|vip|reprise|"
+    r"bootleg|rework|refix|remix|remaster(?:ed)?|flip)\b"
     r"[^\)\]]*[\)\]]",
     re.IGNORECASE,
 )
