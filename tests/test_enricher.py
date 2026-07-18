@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from factories import _candidate, _track
 
-from enricher.cache import EnrichmentCache
+from enricher.cache import EnrichmentCache, NullCache
 from enricher.enricher import _fields_changed, process_track
 from enricher.models import CandidateMatch, TrackRecord
 
@@ -36,6 +36,18 @@ def _high_conf_candidate() -> CandidateMatch:
         confidence=0.0,
         duration_seconds=362,
     )
+
+
+class _SpyCache(NullCache):
+    def __init__(self, candidates: list[CandidateMatch] | None = None) -> None:
+        self.candidates = candidates
+        self.put_calls: list[tuple[str, str, int]] = []
+
+    def get(self, artist: str, title: str) -> list[CandidateMatch] | None:
+        return self.candidates
+
+    def put(self, artist: str, title: str, candidates: list[CandidateMatch]) -> None:
+        self.put_calls.append((artist, title, len(candidates)))
 
 
 @pytest.mark.asyncio
@@ -82,6 +94,26 @@ async def test_process_track_uses_cache_on_second_call(tmp_path: Path) -> None:
             await process_track(_make_track(), cache=cache)
             await process_track(_make_track(), cache=cache)
     assert mock_mb.call_count == 1  # second call served from cache
+
+
+async def test_completeness_check_precedes_cache() -> None:
+    # A track completed since the last run must short-circuit BEFORE any cache read,
+    # so stale cached candidates can never re-clobber manual fixes.
+    cache = _SpyCache(candidates=[_candidate(label="Wrong Label", year="1990")])
+    track = _track(label="Correct Label", year="2001")
+    decision = await process_track(track, cache=cache, sources="both", use_llm=False)
+    assert decision.status == "skipped_already_complete"
+    assert cache.put_calls == []
+
+
+async def test_cached_candidates_replayed_with_current_track_id() -> None:
+    cand = _candidate(label="Club Glow", year="2019", artist="Denham Audio", title="Keep On")
+    cache = _SpyCache(candidates=[cand])
+    track = _track(track_id="fresh-42", label="", year="")
+    decision = await process_track(track, cache=cache, sources="both", use_llm=False, colour_confidence=True)
+    assert decision.track_id == "fresh-42"  # never the id from a previous run
+    assert decision.cache_hit is True
+    assert decision.status == "enriched"
 
 
 @pytest.mark.asyncio

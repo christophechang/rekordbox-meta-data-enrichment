@@ -82,45 +82,40 @@ async def process_track(
     discogs_token: str | None = None,
     colour_confidence: bool = False,
 ) -> EnrichmentDecision:
-    cached = cache.get(track.artist, track.name)
-    if cached is not None:
-        _candidates, decision = cached
-        return decision.model_copy(update={"cache_hit": True})
-
     if _is_already_complete(track):
-        decision = EnrichmentDecision(
+        return EnrichmentDecision(
             track_id=track.track_id,
             artist=track.artist,
             title=track.name,
             status="skipped_already_complete",
         )
-        cache.put(track.artist, track.name, [], decision)
-        return decision
 
-    # --- Lookup ---
-    candidates: list[CandidateMatch] = []
-    try:
-        if sources in ("musicbrainz", "both"):
-            mb_candidates = await lookup_musicbrainz(track)
-            candidates.extend(mb_candidates)
+    cached = cache.get(track.artist, track.name)
+    cache_hit = cached is not None
+    candidates: list[CandidateMatch] = list(cached) if cached is not None else []
 
-        scored = score_all(track, candidates)
-        best_mb_score = scored[0].confidence if scored else 0.0
+    if not cache_hit:
+        # --- Live lookup ---
+        try:
+            if sources in ("musicbrainz", "both"):
+                candidates.extend(await lookup_musicbrainz(track))
 
-        best_mb_has_label = bool(scored[0].label) if scored else False
-        if sources in ("discogs", "both") and (best_mb_score < confidence_threshold or not best_mb_has_label):
-            discogs_candidates = await lookup_discogs(track, token=discogs_token)
-            candidates.extend(discogs_candidates)
-            scored = score_all(track, candidates)
+            scored_probe = score_all(track, candidates)
+            best_score = scored_probe[0].confidence if scored_probe else 0.0
+            best_has_label = bool(scored_probe[0].label) if scored_probe else False
+            if sources in ("discogs", "both") and (best_score < confidence_threshold or not best_has_label):
+                candidates.extend(await lookup_discogs(track, token=discogs_token))
+        except Exception as exc:
+            print(f"ERROR lookup failed for {track.artist} — {track.name}: {exc}", file=sys.stderr)
+            return EnrichmentDecision(
+                track_id=track.track_id,
+                artist=track.artist,
+                title=track.name,
+                status="skipped_api_error",
+            )
+        cache.put(track.artist, track.name, candidates)
 
-    except Exception as exc:
-        print(f"ERROR lookup failed for {track.artist} — {track.name}: {exc}", file=sys.stderr)
-        return EnrichmentDecision(
-            track_id=track.track_id,
-            artist=track.artist,
-            title=track.name,
-            status="skipped_api_error",
-        )
+    scored = score_all(track, candidates)
 
     if not scored:
         heuristic = _heuristic_label(track)
@@ -142,6 +137,7 @@ async def process_track(
                 match=synthetic,
                 fields_changed=changed,
                 confidence_colour=COLOUR_RED if colour_confidence else None,
+                cache_hit=cache_hit,
             )
         else:
             # skipped_no_match is never cached — retried on every run so query
@@ -152,8 +148,8 @@ async def process_track(
                 title=track.name,
                 status="skipped_no_match",
                 clear_colour=colour_confidence,
+                cache_hit=cache_hit,
             )
-        cache.put(track.artist, track.name, [], decision)
         return decision
 
     best = _fill_label(scored[0], candidates)
@@ -167,6 +163,7 @@ async def process_track(
                 artist=track.artist,
                 title=track.name,
                 status="skipped_already_complete",
+                cache_hit=cache_hit,
             )
         else:
             colour = COLOUR_GREEN if colour_confidence else None
@@ -178,8 +175,8 @@ async def process_track(
                 match=best,
                 fields_changed=changed,
                 confidence_colour=colour,
+                cache_hit=cache_hit,
             )
-        cache.put(track.artist, track.name, scored, decision)
         return decision
 
     # --- LLM disambiguation path ---
@@ -195,6 +192,7 @@ async def process_track(
                     artist=track.artist,
                     title=track.name,
                     status="skipped_already_complete",
+                    cache_hit=cache_hit,
                 )
             else:
                 colour = COLOUR_ORANGE if colour_confidence else None
@@ -207,8 +205,8 @@ async def process_track(
                     fields_changed=changed,
                     disambiguation_used=provider,
                     confidence_colour=colour,
+                    cache_hit=cache_hit,
                 )
-            cache.put(track.artist, track.name, scored, decision)
             return decision
 
     # --- Colour-confidence mode: apply low-confidence matches with red ---
@@ -223,8 +221,8 @@ async def process_track(
                 match=best,
                 fields_changed=changed,
                 confidence_colour=COLOUR_RED,
+                cache_hit=cache_hit,
             )
-            cache.put(track.artist, track.name, scored, decision)
             return decision
 
     # --- Low confidence fallthrough ---
@@ -235,6 +233,6 @@ async def process_track(
         status="skipped_low_confidence",
         match=best,
         clear_colour=colour_confidence,
+        cache_hit=cache_hit,
     )
-    cache.put(track.artist, track.name, scored, decision)
     return decision
