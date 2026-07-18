@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 enricher = "enricher.__main__:main"
+enricher-daemon = "enricher.daemon:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
