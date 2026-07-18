@@ -169,21 +169,17 @@ _MB_SEARCH_RESPONSE = {
 _MB_DETAIL_RESPONSE = {
     "id": "mbid-1",
     "title": "Ladbroke Grove",
-    "releases": [
-        {
-            "title": "Hemisphere",
-            "date": "1997-06-02",
-            "release-group": {"secondary-types": []},
-            "label-info": [{"label": {"name": "Shelter Records"}}],
-        }
-    ],
     "relations": [{"type": "remixer", "artist": {"name": "DJ Deep"}}],
+    "releases": [
+        {"id": "rel-1", "title": "Hemisphere", "date": "1997-06-02", "release-group": {"secondary-types": []}}
+    ],
 }
+_MB_RELEASE_RESPONSE = {"id": "rel-1", "label-info": [{"label": {"name": "Shelter Records"}}]}
 
 
 @respx.mock
-async def test_detail_lookup_only_fires_when_needed(tmp_path: Path) -> None:
-    # Winning MB candidate already satisfies the track's blank fields → no detail call.
+async def test_detail_lookup_skipped_when_label_and_remixer_present(tmp_path: Path) -> None:
+    # Track already carries both label and remixer → the detail lookup is not called.
     respx.get("https://musicbrainz.org/ws/2/recording/").respond(json=_MB_SEARCH_RESPONSE)
     detail_route = respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
     track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="Already Set", year="", remixer="Set Too")
@@ -193,14 +189,17 @@ async def test_detail_lookup_only_fires_when_needed(tmp_path: Path) -> None:
 
 
 @respx.mock
-async def test_detail_result_is_cached_with_candidates(tmp_path: Path) -> None:
+async def test_detail_label_and_remixer_cached_with_candidates(tmp_path: Path) -> None:
     respx.get("https://musicbrainz.org/ws/2/recording/").respond(json=_MB_SEARCH_RESPONSE)
     respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
-    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="", year="")
+    respx.get("https://musicbrainz.org/ws/2/release/rel-1").respond(json=_MB_RELEASE_RESPONSE)
+    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="", year="", remixer="")
     cache = EnrichmentCache(tmp_path / "c.json")
     await process_track(track, cache=cache, sources="musicbrainz", use_llm=False, colour_confidence=True)
     cached = cache.get("Kerri Chandler", "Ladbroke Grove")
-    assert cached is not None and cached[0].label == "Shelter Records"
+    assert cached is not None
+    assert cached[0].label == "Shelter Records"
+    assert cached[0].remixer == "DJ Deep"
 
 
 def test_fields_changed_fills_blank_fields_only() -> None:

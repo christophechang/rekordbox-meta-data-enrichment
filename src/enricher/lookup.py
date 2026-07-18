@@ -238,12 +238,15 @@ async def lookup_musicbrainz(track: TrackRecord) -> list[CandidateMatch]:
 
 
 async def mb_recording_details(mbid: str) -> tuple[str, str]:
-    """Fetch (label, remixer) via the recording lookup endpoint.
+    """Fetch (label, remixer) for a recording — a soft-failing refinement.
 
-    Search responses never include label-info or relations; only this endpoint does.
-    NOTE: inc values are '+'-separated and must not be URL-encoded to %2B — build the URL directly.
+    Remixer comes from the recording's artist relations (`inc=artist-rels`). Label lives
+    on the release entity — the `labels` include is invalid on /recording and returns 400 —
+    so it needs a second lookup on the recording's best release. Either call soft-fails to an
+    empty value rather than raising: a detail hiccup never turns a match into skipped_api_error.
+    Build URLs directly so a '+' in a multi-value inc is not %2B-encoded.
     """
-    url = f"{_MB_BASE}/recording/{mbid}?inc=releases+labels+artist-rels&fmt=json"
+    url = f"{_MB_BASE}/recording/{mbid}?inc=releases+artist-rels&fmt=json"
     async with _get_mb_semaphore():
         await asyncio.sleep(_MB_DELAY)
         try:
@@ -251,20 +254,8 @@ async def mb_recording_details(mbid: str) -> tuple[str, str]:
                 resp = await client.get(url, headers=_mb_headers())
                 resp.raise_for_status()
                 data: dict[str, object] = resp.json()
-        except httpx.HTTPError as exc:
-            raise SourceLookupError("musicbrainz", str(exc)) from exc
-
-    label = ""
-    releases = data.get("releases", [])
-    best = _best_mb_release(releases if isinstance(releases, list) else [])
-    if best is not None:
-        label_info = best.get("label-info", [])
-        if isinstance(label_info, list) and label_info:
-            first = label_info[0]
-            if isinstance(first, dict):
-                label_obj = first.get("label", {})
-                if isinstance(label_obj, dict):
-                    label = str(label_obj.get("name", ""))
+        except httpx.HTTPError:
+            return "", ""
 
     remixer = ""
     relations = data.get("relations", [])
@@ -275,7 +266,40 @@ async def mb_recording_details(mbid: str) -> tuple[str, str]:
                 if isinstance(artist_obj, dict):
                     remixer = str(artist_obj.get("name", ""))
                     break
+
+    releases = data.get("releases", [])
+    best = _best_mb_release(releases if isinstance(releases, list) else [])
+    release_id = str(best.get("id", "")) if isinstance(best, dict) else ""
+    label = await _mb_release_label(release_id) if release_id else ""
     return label, remixer
+
+
+async def _mb_release_label(release_id: str) -> str:
+    """Label name from a release lookup (`inc=labels` is valid here, unlike on /recording).
+
+    Soft-fails to "". MusicBrainz uses the sentinel "[no label]" for genuinely unlabelled
+    releases (white labels) — treat that as blank rather than writing it into the library.
+    """
+    url = f"{_MB_BASE}/release/{release_id}?inc=labels&fmt=json"
+    async with _get_mb_semaphore():
+        await asyncio.sleep(_MB_DELAY)
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(url, headers=_mb_headers())
+                resp.raise_for_status()
+                data: dict[str, object] = resp.json()
+        except httpx.HTTPError:
+            return ""
+
+    label_info = data.get("label-info", [])
+    if isinstance(label_info, list) and label_info:
+        first = label_info[0]
+        if isinstance(first, dict):
+            label_obj = first.get("label", {})
+            if isinstance(label_obj, dict):
+                name = str(label_obj.get("name", ""))
+                return "" if name == "[no label]" else name
+    return ""
 
 
 def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> list[CandidateMatch]:

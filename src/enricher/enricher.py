@@ -124,7 +124,8 @@ async def process_track(
             if sources in ("musicbrainz", "both", "all") and not _confident(candidates):
                 candidates.extend(await lookup_musicbrainz(track))
 
-            # MB search can't supply label/remixer — fetch details once when the winner needs them
+            # MB search can't supply label/remixer — a recording-detail + release lookup can.
+            # Soft-fails (never raises), so this refinement can't turn a match into an error.
             probe = score_all(track, candidates)
             if probe and probe[0].source == "musicbrainz" and probe[0].source_id:
                 best_probe = probe[0]
@@ -132,12 +133,13 @@ async def process_track(
                 needs_remixer = not track.remixer and not best_probe.remixer
                 if needs_label or needs_remixer:
                     label, remixer = await mb_recording_details(best_probe.source_id)
-                    for i, c in enumerate(candidates):
-                        if c.source == "musicbrainz" and c.source_id == best_probe.source_id:
-                            candidates[i] = c.model_copy(
-                                update={"label": c.label or label, "remixer": c.remixer or remixer}
-                            )
-                            break
+                    if label or remixer:
+                        for i, c in enumerate(candidates):
+                            if c.source == "musicbrainz" and c.source_id == best_probe.source_id:
+                                candidates[i] = c.model_copy(
+                                    update={"label": c.label or label, "remixer": c.remixer or remixer}
+                                )
+                                break
 
             # Original-mix titles: resolve Discogs winner to its master for the original year
             if (

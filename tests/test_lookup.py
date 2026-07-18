@@ -271,31 +271,70 @@ async def test_mb_fallback_ladder_fires_in_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MB recording-detail follow-up: label/remixer restored via the lookup
-# endpoint, since search responses never carry them (Task 5)
+# MB recording-detail follow-up (Task 5): label + remixer restored via the lookup
+# endpoints, since search responses never carry them. Remixer comes from the
+# recording's artist relations; label needs a separate release lookup (`labels` is a
+# release-only include — requesting it on /recording returns 400). Both soft-fail.
 # ---------------------------------------------------------------------------
 
 _MB_DETAIL_RESPONSE = {
     "id": "mbid-1",
     "title": "Ladbroke Grove",
-    "releases": [
-        {
-            "title": "Hemisphere",
-            "date": "1997-06-02",
-            "release-group": {"secondary-types": []},
-            "label-info": [{"label": {"name": "Shelter Records"}}],
-        }
-    ],
     "relations": [{"type": "remixer", "artist": {"name": "DJ Deep"}}],
+    "releases": [
+        {"id": "rel-1", "title": "Hemisphere", "date": "1997-06-02", "release-group": {"secondary-types": []}}
+    ],
 }
+_MB_RELEASE_RESPONSE = {"id": "rel-1", "label-info": [{"label": {"name": "Shelter Records"}}]}
 
 
 @respx.mock
 async def test_mb_recording_details_extracts_label_and_remixer() -> None:
     respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    respx.get("https://musicbrainz.org/ws/2/release/rel-1").respond(json=_MB_RELEASE_RESPONSE)
     label, remixer = await mb_recording_details("mbid-1")
     assert label == "Shelter Records"
     assert remixer == "DJ Deep"
+
+
+@respx.mock
+async def test_mb_recording_details_never_requests_labels_on_recording() -> None:
+    # Regression: `labels` is release-only and 400s on /recording. The recording call
+    # must request inc=releases+artist-rels; `labels` appears only on the release call.
+    rec = respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    rel = respx.get("https://musicbrainz.org/ws/2/release/rel-1").respond(json=_MB_RELEASE_RESPONSE)
+    await mb_recording_details("mbid-1")
+    rec_url = str(rec.calls[0].request.url)
+    assert "inc=releases+artist-rels" in rec_url
+    assert "labels" not in rec_url
+    assert "inc=labels" in str(rel.calls[0].request.url)
+
+
+@respx.mock
+async def test_mb_recording_details_soft_fails_on_recording_error() -> None:
+    # Regression: a detail-lookup failure is a refinement miss, not a track-killing
+    # error — it returns ("", "") so the caller keeps its already-scored candidates.
+    respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(status_code=400)
+    assert await mb_recording_details("mbid-1") == ("", "")
+
+
+@respx.mock
+async def test_mb_recording_details_soft_fails_when_release_lookup_fails() -> None:
+    # Recording resolves (remixer kept) but the release label lookup 500s → label "".
+    respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    respx.get("https://musicbrainz.org/ws/2/release/rel-1").respond(status_code=500)
+    assert await mb_recording_details("mbid-1") == ("", "DJ Deep")
+
+
+@respx.mock
+async def test_mb_release_label_no_label_sentinel_is_blank() -> None:
+    # MusicBrainz uses "[no label]" for genuinely unlabelled releases — never written.
+    respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    respx.get("https://musicbrainz.org/ws/2/release/rel-1").respond(
+        json={"id": "rel-1", "label-info": [{"label": {"name": "[no label]"}}]}
+    )
+    label, _ = await mb_recording_details("mbid-1")
+    assert label == ""
 
 
 def test_escape_lucene() -> None:
