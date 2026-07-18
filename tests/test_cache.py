@@ -1,96 +1,64 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-import pytest
-
 from enricher.cache import EnrichmentCache
-from enricher.models import CandidateMatch, EnrichmentDecision
+from enricher.models import CandidateMatch
 
 
-def _make_decision(track_id: str = "1") -> EnrichmentDecision:
-    return EnrichmentDecision(
-        track_id=track_id,
-        artist="Artist",
-        title="Track",
-        status="enriched",
-        match=CandidateMatch(
-            source="musicbrainz",
-            source_id="x",
-            artist="Artist",
-            title="Track",
-            label="Defected",
-            year="2021",
-            confidence=0.9,
-        ),
-        fields_changed={"label": ("", "Defected")},
-        disambiguation_used=None,
-    )
+def _cand(label: str = "Hotflush") -> CandidateMatch:
+    return CandidateMatch(source="discogs", source_id="1", artist="A", title="T", label=label)
 
 
-def test_cache_put_and_get_returns_decision(tmp_path: Path) -> None:
-    cache = EnrichmentCache(tmp_path / "cache.json")
-    decision = _make_decision()
-    cache.put("Artist", "Track", [], decision)
-    result = cache.get("Artist", "Track")
-    assert result is not None
-    _, retrieved = result
-    assert retrieved.status == "enriched"
+def test_cache_stores_and_returns_candidates(tmp_path: Path) -> None:
+    cache = EnrichmentCache(tmp_path / "c.json")
+    cache.put("A", "T", [_cand()])
+    got = cache.get("A", "T")
+    assert got is not None and got[0].label == "Hotflush"
 
 
-def test_cache_get_returns_none_for_missing_key(tmp_path: Path) -> None:
-    cache = EnrichmentCache(tmp_path / "cache.json")
-    assert cache.get("Unknown", "Track") is None
+def test_cache_ignores_empty_candidate_lists(tmp_path: Path) -> None:
+    # no_match retry semantics live here: an empty result is never persisted
+    cache = EnrichmentCache(tmp_path / "c.json")
+    cache.put("A", "T", [])
+    assert cache.get("A", "T") is None
 
 
-def test_cache_entry_never_expires(tmp_path: Path) -> None:
-    import json
-
-    cache = EnrichmentCache(tmp_path / "cache.json")
-    cache.put("Artist", "Track", [], _make_decision())
+def test_cache_flush_is_atomic_and_versioned(tmp_path: Path) -> None:
+    path = tmp_path / "c.json"
+    cache = EnrichmentCache(path)
+    cache.put("A", "T", [_cand()])
     cache.flush()
-    # Backdate the entry far into the past — should still be returned
-    data = json.loads((tmp_path / "cache.json").read_text())
-    key = list(data.keys())[0]
-    data[key]["looked_up_at"] = "2000-01-01T00:00:00+00:00"
-    (tmp_path / "cache.json").write_text(json.dumps(data))
-
-    fresh_cache = EnrichmentCache(tmp_path / "cache.json")
-    assert fresh_cache.get("Artist", "Track") is not None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["version"] == 2 and "entries" in raw
+    assert not path.with_suffix(".tmp").exists()
 
 
-def test_cache_flush_writes_file(tmp_path: Path) -> None:
-    cache_path = tmp_path / "cache.json"
-    cache = EnrichmentCache(cache_path)
-    cache.put("Artist", "Track", [], _make_decision())
-    cache.flush()
-    assert cache_path.exists()
+def test_cache_migrates_v1_salvaging_candidates_dropping_decisions(tmp_path: Path) -> None:
+    path = tmp_path / "c.json"
+    v1 = {
+        "a — t": {
+            "looked_up_at": "2026-01-01T00:00:00+00:00",
+            "candidates": [_cand().model_dump()],
+            "decision": {"track_id": "99", "artist": "A", "title": "T", "status": "enriched"},
+        },
+        "b — u": {
+            "looked_up_at": "2026-01-01T00:00:00+00:00",
+            "candidates": [],
+            "decision": {"track_id": "1", "artist": "B", "title": "U", "status": "skipped_already_complete"},
+        },
+    }
+    path.write_text(json.dumps(v1), encoding="utf-8")
+    cache = EnrichmentCache(path)
+    assert cache.get("A", "T") is not None  # candidates salvaged
+    assert cache.get("B", "U") is None  # empty-candidates entry dropped
 
 
-def test_cache_normalises_key_case_insensitive(tmp_path: Path) -> None:
-    cache = EnrichmentCache(tmp_path / "cache.json")
-    decision = _make_decision()
-    cache.put("DJ EXAMPLE", "SOME TRACK", [], decision)
-    result = cache.get("dj example", "some track")
-    assert result is not None
-
-
-def test_cache_loads_existing_file_on_init(tmp_path: Path) -> None:
-    cache_path = tmp_path / "cache.json"
-    cache = EnrichmentCache(cache_path)
-    cache.put("Artist", "Track", [], _make_decision())
-    cache.flush()
-
-    reloaded = EnrichmentCache(cache_path)
-    assert reloaded.get("Artist", "Track") is not None
-
-
-@pytest.mark.parametrize("count", [49, 50, 51])
-def test_cache_auto_flushes_at_interval(tmp_path: Path, count: int) -> None:
-    cache_path = tmp_path / "cache.json"
-    cache = EnrichmentCache(cache_path)
-    for i in range(count):
-        cache.put(f"Artist{i}", f"Track{i}", [], _make_decision(str(i)))
-    # After 50 puts the cache should have auto-flushed
-    if count >= 50:
-        assert cache_path.exists()
+def test_cache_recovers_from_corrupt_file(tmp_path: Path) -> None:
+    path = tmp_path / "c.json"
+    path.write_text("{not json", encoding="utf-8")
+    cache = EnrichmentCache(path)  # must not raise
+    assert cache.get("A", "T") is None
+    corrupt_backups = list(tmp_path.glob("c.corrupt-*"))
+    assert len(corrupt_backups) == 1

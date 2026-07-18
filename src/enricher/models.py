@@ -21,7 +21,7 @@ class TrackRecord(BaseModel):
 
 
 class CandidateMatch(BaseModel):
-    source: Literal["musicbrainz", "discogs"]
+    source: Literal["musicbrainz", "discogs", "beatport"]
     source_id: str
     artist: str
     title: str
@@ -33,6 +33,9 @@ class CandidateMatch(BaseModel):
     styles: list[str] = []
     duration_seconds: int | None = None
     confidence: float = 0.0
+
+
+DisambigProvider = Literal["mistral", "groq", "gemini", "openrouter"]
 
 
 class EnrichmentDecision(BaseModel):
@@ -48,7 +51,7 @@ class EnrichmentDecision(BaseModel):
     ]
     match: CandidateMatch | None = None
     fields_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)
-    disambiguation_used: Literal["mistral", "groq", "gemini", "openrouter"] | None = None
+    disambiguation_used: DisambigProvider | None = None
     confidence_colour: str | None = None  # set when --colour-confidence is active
     clear_colour: bool = False  # explicitly blank the Colour field (no usable match in colour-confidence mode)
     cache_hit: bool = False  # True when result was served from cache, not a live API call

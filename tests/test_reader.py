@@ -75,3 +75,37 @@ def test_parse_collection_missing_collection_node_raises(tmp_path: Path) -> None
     bad_xml.write_text('<?xml version="1.0"?><DJ_PLAYLISTS Version="1.0.0"/>', encoding="utf-8")
     with pytest.raises(ValueError, match="COLLECTION"):
         parse_collection(bad_xml)
+
+
+def _fixture_with_soundcloud_and_blank_artist(tmp_path: Path) -> Path:
+    xml_file = tmp_path / "test.xml"
+    xml_text = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="rekordbox" Version="7.2.11" Company="AlphaTheta"/>
+  <COLLECTION Entries="3">
+    <TRACK TrackID="1" Name="Normal Track" Artist="Normal Artist" Genre="House"
+           AverageBpm="125.00" Tonality="4A" TotalTime="300"
+           Label="Defected" Year="2022" Remixer="" Album="EP 1" Mix="Original Mix"
+           Location="file://localhost/music/alpha.mp3"/>
+    <TRACK TrackID="sc1" Name="SoundCloud Track" Artist="SC Artist" Genre="House"
+           AverageBpm="126.00" Tonality="5A" TotalTime="200"
+           Label="SC" Year="2023" Remixer="" Album="" Mix=""
+           Location="file://localhostsoundcloud/some/track"/>
+    <TRACK TrackID="blank1" Name="Blank Artist Track" Artist="" Genre="Techno"
+           AverageBpm="140.00" Tonality="10B" TotalTime="420"
+           Label="" Year="" Remixer="" Album="" Mix=""
+           Location="file://localhost/music/gamma.mp3"/>
+  </COLLECTION>
+</DJ_PLAYLISTS>
+"""
+    xml_file.write_text(xml_text, encoding="utf-8")
+    return xml_file
+
+
+def test_reader_exclusion_message_is_honest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # one soundcloud track + one blank-artist track excluded
+    xml_file = _fixture_with_soundcloud_and_blank_artist(tmp_path)
+    parse_collection(xml_file)
+    err = capsys.readouterr().err
+    assert "excluded 2 tracks (SoundCloud/demo/blank-artist)" in err

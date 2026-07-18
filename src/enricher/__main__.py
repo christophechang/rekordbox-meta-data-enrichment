@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from datetime import date
@@ -13,7 +14,7 @@ from enricher.cache import CacheProtocol, EnrichmentCache, NullCache
 from enricher.enricher import process_track
 from enricher.models import EnrichmentDecision
 from enricher.reader import parse_collection
-from enricher.reporter import build_report
+from enricher.reporter import build_changes, build_report
 from enricher.writer import write_enriched_xml
 
 load_dotenv()
@@ -61,9 +62,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--sources",
-        choices=["musicbrainz", "discogs", "both"],
-        default="both",
-        help="Which metadata sources to query (default: both)",
+        choices=["beatport", "musicbrainz", "discogs", "both", "all"],
+        default="all",
+        help="Which metadata sources to query (default: all = beatport → discogs → musicbrainz; 'both' = musicbrainz+discogs, legacy)",
     )
     parser.add_argument("--no-llm", action="store_true", help="Disable LLM disambiguation (auto-confidence only)")
     parser.add_argument(
@@ -111,6 +112,14 @@ async def run(args: argparse.Namespace) -> None:
     sources: str = args.sources
     colour_confidence: bool = not args.no_colour_confidence
 
+    llm_keys = ("MISTRAL_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY")
+    if not args.no_llm and not any(os.environ.get(k) for k in llm_keys):
+        print(
+            "WARNING: LLM disambiguation enabled but no provider keys set — "
+            "the 0.65-0.85 confidence band will be skipped.",
+            file=sys.stderr,
+        )
+
     if args.limit is not None:
         tracks = tracks[: args.limit]
 
@@ -118,15 +127,21 @@ async def run(args: argparse.Namespace) -> None:
     total = len(tracks)
 
     for i, track in enumerate(tracks, 1):
-        decision = await process_track(
-            track,
-            cache=cache,
-            sources=sources,
-            confidence_threshold=args.confidence_threshold,
-            use_llm=not args.no_llm,
-            discogs_token=discogs_token,
-            colour_confidence=colour_confidence,
-        )
+        try:
+            decision = await process_track(
+                track,
+                cache=cache,
+                sources=sources,
+                confidence_threshold=args.confidence_threshold,
+                use_llm=not args.no_llm,
+                discogs_token=discogs_token,
+                colour_confidence=colour_confidence,
+            )
+        except Exception as exc:  # containment: one bad track never kills the run
+            print(f"ERROR unexpected failure for {track.artist} — {track.name}: {exc}", file=sys.stderr)
+            decision = EnrichmentDecision(
+                track_id=track.track_id, artist=track.artist, title=track.name, status="skipped_api_error"
+            )
         decisions.append(decision)
 
         if i % 50 == 0 or i == total:
@@ -154,6 +169,10 @@ async def run(args: argparse.Namespace) -> None:
 
     applied = write_enriched_xml(args.input, args.output, decisions, full_export=args.full_export)
     print(f"Wrote enriched XML to {args.output} ({applied} tracks updated).", file=sys.stderr)
+
+    changes_path = args.output.with_suffix(".changes.json")
+    changes_path.write_text(json.dumps(build_changes(decisions), ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Wrote change list to {changes_path}.", file=sys.stderr)
 
 
 def main() -> None:

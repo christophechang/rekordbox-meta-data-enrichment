@@ -11,6 +11,30 @@ _COLOUR_LABEL: dict[str | None, str] = {
 }
 
 
+def build_changes(decisions: list[EnrichmentDecision]) -> list[dict[str, object]]:
+    """Machine-readable change list — the contract consumed by the daemon's Discord report
+    and any future write-back agent (spec §5.3). One entry per changed field."""
+    changes: list[dict[str, object]] = []
+    for d in decisions:
+        if d.status != "enriched" or d.match is None:
+            continue
+        for field, (old, new) in d.fields_changed.items():
+            changes.append(
+                {
+                    "track_id": d.track_id,
+                    "artist": d.artist,
+                    "title": d.title,
+                    "field": field,
+                    "old": old,
+                    "new": new,
+                    "source": d.match.source,
+                    "confidence": d.match.confidence,
+                    "colour": d.confidence_colour,
+                }
+            )
+    return changes
+
+
 def build_report(decisions: list[EnrichmentDecision]) -> str:
     enriched = [d for d in decisions if d.status == "enriched"]
     low_conf = [d for d in decisions if d.status == "skipped_low_confidence"]
@@ -54,13 +78,13 @@ def build_report(decisions: list[EnrichmentDecision]) -> str:
         lines.append("-" * 72)
         for d in enriched:
             assert d.match is not None  # noqa: S101 — status==enriched guarantees match is set
-            parts: list[str] = []
+            parts: list[str] = [d.match.source]
             if d.disambiguation_used is not None:
                 parts.append(d.disambiguation_used)
             colour_label = _COLOUR_LABEL.get(d.confidence_colour, "")
             if colour_label:
                 parts.append(colour_label)
-            tag = f"[{', '.join(parts)}]" if parts else ""
+            tag = f"[{', '.join(parts)}]"
             lines.append(f"  {d.artist} — {d.title} {tag}".rstrip())
             for field, (old, new) in d.fields_changed.items():
                 old_display = old if old else "(empty)"
