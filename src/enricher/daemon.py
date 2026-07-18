@@ -37,6 +37,10 @@ _ENRICH_LOG_NAME = "enrich.log"
 _CHANGES_SUFFIX = ".changes.json"
 _STDERR_TAIL_CHARS = 2000
 _HTTP_TIMEOUT = 30.0
+# Generous ceiling: a cold full-library run can take ~90 min; this only fires on a
+# genuine hang. launchd runs one instance at a time, so an unbounded hang would
+# silently stall every future trigger — the timeout turns that into a retryable failure.
+_DEFAULT_TIMEOUT_SECS = 7200
 
 
 class _ConfigError(Exception):
@@ -50,6 +54,7 @@ class _Config:
     state_file: Path
     cache_file: Path
     sources: str
+    timeout_secs: int
     discord_token: str | None
     discord_channel: str | None
 
@@ -80,12 +85,20 @@ def _load_config(environ: Mapping[str, str]) -> _Config:
 
     state_raw = environ.get("ENRICH_STATE_FILE")
     cache_raw = environ.get("ENRICH_CACHE_FILE")
+    timeout_raw = environ.get("ENRICH_TIMEOUT_SECS")
+    try:
+        timeout_secs = int(timeout_raw) if timeout_raw else _DEFAULT_TIMEOUT_SECS
+    except ValueError:
+        timeout_secs = _DEFAULT_TIMEOUT_SECS
+    if timeout_secs <= 0:
+        timeout_secs = _DEFAULT_TIMEOUT_SECS
     return _Config(
         watch_file=watch_file,
         out_dir=out_dir,
         state_file=Path(state_raw).expanduser() if state_raw else out_dir / ".daemon-state.json",
         cache_file=Path(cache_raw).expanduser() if cache_raw else out_dir / ".enrichment_cache.json",
         sources=environ.get("ENRICH_SOURCES") or "all",
+        timeout_secs=timeout_secs,
         discord_token=environ.get("DISCORD_BOT_TOKEN") or None,
         discord_channel=environ.get("ENRICH_DISCORD_CHANNEL_ID") or None,
     )
@@ -166,7 +179,9 @@ def _run_enricher(config: _Config) -> subprocess.CompletedProcess[str]:
         str(config.cache_file),
     ]
     _log(f"running enricher: {' '.join(argv)}")
-    return subprocess.run(argv, capture_output=True, text=True, env=os.environ, check=False)
+    return subprocess.run(
+        argv, capture_output=True, text=True, env=os.environ, check=False, timeout=config.timeout_secs
+    )
 
 
 def _post_discord(*, channel_id: str, token: str, content: str, attachment: Path | None) -> None:
@@ -208,7 +223,12 @@ def _run(config: _Config) -> int:
         return 0
 
     config.out_dir.mkdir(parents=True, exist_ok=True)
-    result = _run_enricher(config)
+    try:
+        result = _run_enricher(config)
+    except subprocess.TimeoutExpired:
+        _log(f"enricher timed out after {config.timeout_secs}s; state NOT updated (will retry on next trigger)")
+        _try_post_discord(config, f"Enrichment run timed out after {config.timeout_secs}s.", None)
+        return 1
     (config.out_dir / _ENRICH_LOG_NAME).write_text((result.stdout or "") + (result.stderr or ""), encoding="utf-8")
 
     if result.returncode != 0:

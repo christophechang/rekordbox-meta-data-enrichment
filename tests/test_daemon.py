@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -69,6 +70,7 @@ def _make_config(
         state_file=out / ".daemon-state.json",
         cache_file=out / ".enrichment_cache.json",
         sources=sources,
+        timeout_secs=7200,
         discord_token=token,
         discord_channel=channel,
     )
@@ -121,6 +123,7 @@ def test_load_config_defaults(tmp_path: Path) -> None:
     assert cfg.state_file == tmp_path / "out" / ".daemon-state.json"
     assert cfg.cache_file == tmp_path / "out" / ".enrichment_cache.json"
     assert cfg.sources == "all"
+    assert cfg.timeout_secs == 7200
     assert cfg.discord_token is None
     assert cfg.discord_channel is None
 
@@ -250,6 +253,55 @@ def test_enricher_failure_does_not_update_state_and_returns_1(tmp_path: Path, mo
     _install_fake_run(monkeypatch, returncode=2, stderr="Traceback: boom")
     assert daemon._run(config) == 1
     assert not config.state_file.exists()
+
+
+def test_failure_preserves_existing_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A failed run on a CHANGED input must leave a pre-existing state hash byte-for-byte intact.
+    config = _make_config(tmp_path)
+    config.out_dir.mkdir(parents=True)
+    config.state_file.write_text(json.dumps({"last_input_sha256": "OLDHASH"}), encoding="utf-8")
+    _install_fake_run(monkeypatch, returncode=1, stderr="boom")
+    assert daemon._run(config) == 1
+    assert json.loads(config.state_file.read_text())["last_input_sha256"] == "OLDHASH"
+
+
+def test_run_passes_env_and_timeout_to_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Credential pass-through to the enricher depends on env=os.environ; the hang guard on timeout=.
+    config = _make_config(tmp_path)
+    record: dict[str, object] = {}
+    _install_fake_run(monkeypatch, changes=_CHANGES, record=record)
+    daemon._run(config)
+    kwargs = record["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["env"] is os.environ
+    assert kwargs["timeout"] == config.timeout_secs
+
+
+def test_timeout_returns_1_and_preserves_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path)
+    config.out_dir.mkdir(parents=True)
+    config.state_file.write_text(json.dumps({"last_input_sha256": "OLDHASH"}), encoding="utf-8")
+
+    def _timeout_run(argv: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(argv, timeout=1.0)
+
+    monkeypatch.setattr(subprocess, "run", _timeout_run)
+    assert daemon._run(config) == 1  # a hang becomes a retryable failure, not an infinite block
+    assert json.loads(config.state_file.read_text())["last_input_sha256"] == "OLDHASH"
+
+
+def test_missing_watch_file_returns_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path)
+    config.watch_file.unlink()
+    called = {"ran": False}
+
+    def _should_not_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        called["ran"] = True
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(subprocess, "run", _should_not_run)
+    assert daemon._run(config) == 2
+    assert called["ran"] is False
 
 
 @respx.mock
