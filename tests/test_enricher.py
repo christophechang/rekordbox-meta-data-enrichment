@@ -272,7 +272,11 @@ _BP_TRACKS_RESPONSE = {
 async def test_source_order_beatport_first_skips_others_when_confident(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("BEATPORT_API_TOKEN", "t")
+    from enricher import beatport
+
+    # Beatport auth (PKCE login) is covered in test_beatport.py; this test is
+    # about source ordering, so stub token acquisition and let the real search run.
+    monkeypatch.setattr(beatport, "_get_token", AsyncMock(return_value="t"))
     bp = respx.get("https://api.beatport.com/v4/catalog/tracks/").respond(json=_BP_TRACKS_RESPONSE)
     discogs = respx.get("https://api.discogs.com/database/search").respond(json={"results": []})
     mb = respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})
@@ -314,8 +318,19 @@ async def test_discogs_source_lookup_error_yields_skipped_api_error(tmp_path: Pa
 async def test_beatport_missing_credentials_skips_to_other_sources(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    for var in ("BEATPORT_API_TOKEN", "BEATPORT_CLIENT_ID", "BEATPORT_CLIENT_SECRET"):
+    for var in (
+        "BEATPORT_API_TOKEN",
+        "BEATPORT_CLIENT_ID",
+        "BEATPORT_CLIENT_SECRET",
+        "BEATPORT_USERNAME",
+        "BEATPORT_PASSWORD",
+    ):
         monkeypatch.delenv(var, raising=False)
+    # Isolate the token cache so a real .beatport_token.json can't authenticate us.
+    from enricher import beatport
+
+    monkeypatch.setattr(beatport, "_token_cache", None)
+    monkeypatch.setattr(beatport, "_TOKEN_CACHE_FILE", tmp_path / ".beatport_token.json")
     bp = respx.get("https://api.beatport.com/v4/catalog/tracks/").respond(json={"results": []})
     discogs_search = {"results": [{"id": 9001, "title": "Artist - Release", "year": 1999, "label": ["Some Label"]}]}
     respx.get("https://api.discogs.com/database/search").respond(json=discogs_search)
