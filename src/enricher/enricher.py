@@ -4,7 +4,13 @@ import sys
 
 from enricher.cache import CacheProtocol
 from enricher.disambiguator import disambiguate
-from enricher.lookup import lookup_discogs, lookup_musicbrainz, mb_recording_details
+from enricher.lookup import (
+    discogs_master_year,
+    has_remix_designator,
+    lookup_discogs,
+    lookup_musicbrainz,
+    mb_recording_details,
+)
 from enricher.models import CandidateMatch, EnrichmentDecision, TrackRecord
 from enricher.scorer import score_all
 
@@ -119,6 +125,21 @@ async def process_track(
                             candidates[i] = c.model_copy(
                                 update={"label": c.label or label, "remixer": c.remixer or remixer}
                             )
+                            break
+
+            # Original-mix titles: resolve Discogs winner to its master for the original year
+            if (
+                probe
+                and probe[0].source == "discogs"
+                and probe[0].source_id
+                and not track.year
+                and not has_remix_designator(track.name)
+            ):
+                master_year = await discogs_master_year(probe[0].source_id, discogs_token)
+                if master_year:
+                    for i, c in enumerate(candidates):
+                        if c.source == "discogs" and c.source_id == probe[0].source_id:
+                            candidates[i] = c.model_copy(update={"year": master_year})
                             break
         except Exception as exc:
             print(f"ERROR lookup failed for {track.artist} — {track.name}: {exc}", file=sys.stderr)

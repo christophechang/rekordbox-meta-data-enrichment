@@ -70,6 +70,10 @@ _MIX_DESIGNATOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Remix-TYPE versions get the remix's year; everything else (Original/Extended/Radio/Remaster)
+# is the original recording and gets the earliest release year. Spec §2 year rule.
+_REMIX_MARKER_RE = re.compile(r"[\(\[][^\)\]]*(?:remix|rework|refix|flip|bootleg|vip)[^\)\]]*[\)\]]", re.IGNORECASE)
+
 # Matches Lucene special characters that must be backslash-escaped in MusicBrainz queries
 _LUCENE_SPECIALS = re.compile(r'(&&|\|\||[+\-!(){}\[\]^"~*?:\\/])')
 
@@ -84,6 +88,15 @@ def _clean_title(title: str) -> str:
 def _strip_mix_designators(title: str) -> str:
     """Remove mix/version/feat qualifiers — DBs often index the bare track name."""
     return _MIX_DESIGNATOR_RE.sub("", title).strip()
+
+
+def has_remix_designator(title: str) -> bool:
+    """True for remix-type versions (remix/rework/refix/flip/bootleg/vip) — these keep their own year.
+
+    "Extended Mix"/"Original Mix"/"Radio Edit"/"Remaster" are the original recording, not a new
+    version, so they return False and inherit the earliest release year instead.
+    """
+    return bool(_REMIX_MARKER_RE.search(title))
 
 
 def _escape_lucene(text: str) -> str:
@@ -342,3 +355,25 @@ async def lookup_discogs(track: TrackRecord, token: str | None = None) -> list[C
     if not results and stripped_title != clean_title:
         results = await _discogs_query(primary, stripped_title, track.name, token)
     return results
+
+
+async def discogs_master_year(release_id: str, token: str | None) -> str:
+    """Original-release year via the release's master. Soft-fails to '' — refinement only."""
+    delay = _DISCOGS_DELAY_AUTHED if token else _DISCOGS_DELAY_UNAUTHED
+    async with _get_discogs_semaphore():
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                await asyncio.sleep(delay)
+                rel = await client.get(f"{_DISCOGS_BASE}/releases/{release_id}", headers=_discogs_headers(token))
+                rel.raise_for_status()
+                rel_data: dict[str, object] = rel.json()
+                master_id = rel_data.get("master_id")
+                if not master_id:
+                    return str(rel_data.get("year") or "")
+                await asyncio.sleep(delay)
+                mst = await client.get(f"{_DISCOGS_BASE}/masters/{master_id}", headers=_discogs_headers(token))
+                mst.raise_for_status()
+                mst_data: dict[str, object] = mst.json()
+                return str(mst_data.get("year") or "")
+        except httpx.HTTPError:
+            return ""

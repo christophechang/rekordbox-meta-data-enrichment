@@ -15,6 +15,8 @@ from enricher.lookup import (
     _extract_discogs_candidates,
     _primary_artist,
     _strip_mix_designators,
+    discogs_master_year,
+    has_remix_designator,
     lookup_discogs,
     lookup_musicbrainz,
     mb_recording_details,
@@ -397,3 +399,37 @@ def test_discogs_album_is_release_title_not_artist_prefixed() -> None:
     cands = _extract_discogs_candidates(data, "Ladbroke Grove")
     assert cands[0].album == "Hemisphere"
     assert cands[0].artist == "Kerri Chandler"
+
+
+# ---------------------------------------------------------------------------
+# Remix-designator detection + Discogs master-year resolution (Task 7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Fall Down (Calibre Remix)", True),
+        ("Track (VIP)", True),
+        ("Track (Somebody's Flip)", True),
+        ("Move Your Body (Extended Mix)", False),
+        ("Ladbroke Grove", False),
+        ("Song (Radio Edit)", False),
+        ("Old Track (2015 Remastered)", False),
+    ],
+)
+def test_has_remix_designator(title: str, expected: bool) -> None:
+    assert has_remix_designator(title) is expected
+
+
+@respx.mock
+async def test_discogs_master_year_resolves_via_master() -> None:
+    respx.get("https://api.discogs.com/releases/9001").respond(json={"id": 9001, "master_id": 555, "year": 2019})
+    respx.get("https://api.discogs.com/masters/555").respond(json={"id": 555, "year": 1994})
+    assert await discogs_master_year("9001", token=None) == "1994"
+
+
+@respx.mock
+async def test_discogs_master_year_falls_back_to_release_year() -> None:
+    respx.get("https://api.discogs.com/releases/9001").respond(json={"id": 9001, "year": 2019})
+    assert await discogs_master_year("9001", token=None) == "2019"

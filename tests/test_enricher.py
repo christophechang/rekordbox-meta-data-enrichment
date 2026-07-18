@@ -221,3 +221,24 @@ def test_fields_changed_empty_when_track_complete() -> None:
     track = _track(label="Hotflush", year="2015", remixer="")
     match = _candidate(label="Other", year="1999", remixer="")
     assert _fields_changed(track, match) == {}
+
+
+# ---------------------------------------------------------------------------
+# Discogs master-year refinement: original-mix titles resolve the winning
+# Discogs candidate to its master year before caching (Task 7)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_original_title_gets_master_year_merged_before_cache(tmp_path: Path) -> None:
+    discogs_search = {"results": [{"id": 9001, "title": "Artist - Release", "year": 2019, "label": ["Some Label"]}]}
+    respx.get("https://api.discogs.com/database/search").respond(json=discogs_search)
+    respx.get("https://api.discogs.com/releases/9001").respond(json={"id": 9001, "master_id": 555, "year": 2019})
+    respx.get("https://api.discogs.com/masters/555").respond(json={"id": 555, "year": 1994})
+    track = _track(name="Release", artist="Artist", label="", year="")
+    cache = EnrichmentCache(tmp_path / "c.json")
+    decision = await process_track(track, cache=cache, sources="discogs", use_llm=False, colour_confidence=True)
+    assert decision.status == "enriched"
+    assert decision.fields_changed.get("year") == ("", "1994")
+    cached = cache.get("Artist", "Release")
+    assert cached is not None and cached[0].year == "1994"  # refined year persisted with candidates
