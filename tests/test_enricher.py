@@ -300,3 +300,42 @@ async def test_discogs_source_lookup_error_yields_skipped_api_error(tmp_path: Pa
         decision = await process_track(_make_track(), cache=cache, sources="both", use_llm=False)
     assert decision.status == "skipped_api_error"
     assert cache.get("DJ Example", "Some Track") is None
+
+
+# ---------------------------------------------------------------------------
+# Credential-less default path: Beatport is skipped (with a warning) when no
+# credentials are configured, and the pipeline falls through to Discogs/MB;
+# --sources both must never call Beatport at all (Task 8 follow-up, closed
+# before final merge)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_beatport_missing_credentials_skips_to_other_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for var in ("BEATPORT_API_TOKEN", "BEATPORT_CLIENT_ID", "BEATPORT_CLIENT_SECRET"):
+        monkeypatch.delenv(var, raising=False)
+    bp = respx.get("https://api.beatport.com/v4/catalog/tracks/").respond(json={"results": []})
+    discogs_search = {"results": [{"id": 9001, "title": "Artist - Release", "year": 1999, "label": ["Some Label"]}]}
+    respx.get("https://api.discogs.com/database/search").respond(json=discogs_search)
+    respx.get("https://api.discogs.com/releases/9001").respond(json={"id": 9001, "year": 1999})
+    respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})
+    track = _track(name="Release", artist="Artist", label="", year="")
+    decision = await process_track(
+        track, cache=EnrichmentCache(tmp_path / "c.json"), sources="all", use_llm=False, colour_confidence=True
+    )
+    assert not bp.called
+    assert decision.status == "enriched"
+    assert "beatport skipped" in capsys.readouterr().err
+
+
+@respx.mock
+async def test_sources_both_never_calls_beatport(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("BEATPORT_API_TOKEN", "t")
+    bp = respx.get("https://api.beatport.com/v4/catalog/tracks/").respond(json={"results": []})
+    respx.get("https://api.discogs.com/database/search").respond(json={"results": []})
+    respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})
+    track = _track(name="Nothing Findable", artist="Nobody", label="", year="")
+    await process_track(track, cache=EnrichmentCache(tmp_path / "c.json"), sources="both", use_llm=False)
+    assert not bp.called
