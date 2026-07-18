@@ -7,8 +7,9 @@ from enricher.models import CandidateMatch, TrackRecord
 
 # Remix suffix patterns to strip when comparing titles
 _REMIX_RE = re.compile(
-    r"\s*[\(\[]"
-    r"(?:original|club|radio|extended|instrumental|dub|vocal|mix|edit|version|vip|reprise|bootleg|rework|remix)"
+    r"\s*[\(\[][^\)\]]*"
+    r"(?:original|club|radio|extended|instrumental|dub|vocal|mix|edit|version|vip|reprise|"
+    r"bootleg|rework|refix|remix|remaster(?:ed)?|flip)"
     r"[^\)\]]*[\)\]]",
     re.IGNORECASE,
 )
@@ -105,6 +106,12 @@ _GENRE_FAMILIES: list[frozenset[str]] = [
     frozenset({"uk garage", "garage", "speed garage", "2-step"}),
     frozenset({"jungle", "breakbeat", "breaks"}),
     frozenset({"electronic", "electronica", "electro"}),
+    frozenset({"dubstep", "grime", "uk bass", "bass", "bass music", "140"}),
+    frozenset({"disco", "nu-disco", "nu disco", "funk", "boogie"}),
+    frozenset({"ambient", "downtempo", "trip hop", "trip-hop", "chillout"}),
+    frozenset({"hip hop", "hip-hop", "rap", "trap"}),
+    frozenset({"dub", "reggae", "dancehall"}),
+    frozenset({"hardcore", "happy hardcore", "rave", "gabber"}),
 ]
 
 
@@ -125,8 +132,10 @@ def _artist_score(track_artist: str, candidate_artist: str) -> float:
     norm_cand = _normalise(candidate_artist)
     if norm_track == norm_cand:
         return 0.40
-    # Check if one is contained in the other (handles "Artist feat. X" vs "Artist")
-    if norm_track in norm_cand or norm_cand in norm_track:
+    # Check if one is contained in the other (handles "Artist feat. X" vs "Artist").
+    # Guard against short names spuriously matching as a substring of an unrelated
+    # artist (e.g. "Ben" in "Benny Benassi").
+    if (norm_track in norm_cand or norm_cand in norm_track) and min(len(norm_track), len(norm_cand)) >= 4:
         return 0.35
     # Token overlap
     track_tokens = set(norm_track.split())

@@ -49,19 +49,23 @@ def _get_discogs_semaphore() -> asyncio.Semaphore:
     return _DISCOGS_SEMAPHORE
 
 
-# Matches trailing BPM/key info appended to titles, e.g. "Track Title 128", "Mix (Extended) 1B 137"
-_TRAILING_BPM_RE = re.compile(r"\s+\d{1,3}[AB]?(\s+\d{2,3})?\s*$")
+# MIK artefacts only: trailing "7A", "7A 128", or "128 7A". Bare numbers are never
+# stripped — "Xpander 2" and "Vol. 3" are legitimate titles.
+_TRAILING_BPM_RE = re.compile(r"\s+(?:\d{1,2}[AB](?:\s+\d{2,3})?|\d{2,3}\s+\d{1,2}[AB])\s*$", re.IGNORECASE)
 
 # Matches catalogue numbers in brackets/parens, e.g. "[HTH115]", "(BTB002)"
 _CATALOGUE_RE = re.compile(r"[\[\(][A-Z]{2,}[-\s]?\d+[\]\)]")
 
-# Matches common mix/version/feat designators that DBs often omit from track listings
+# Matches common mix/version/feat designators that DBs often omit from track listings,
+# including the dominant club pattern "(<Artist> Remix)".
 _MIX_DESIGNATOR_RE = re.compile(
     r"\s*[\[\(]"
     r"(?:Original Mix|Extended Mix|Extended|Club Mix|VIP Mix|Dub Mix|Dub|Instrumental|"
-    r"Radio Edit|Radio Mix|Album Version|Single Version|\d{4}\s+Remaster(?:ed)?|"
+    r"Radio Edit|Radio Mix|Album Version|Single Version|\d{4}\s+Remaster(?:ed)?|Remaster(?:ed)?|"
     r"feat\.[^)\]]*|ft\.[^)\]]*|with\s+[^)\]]*|Featuring\s+[^)\]]*|"
-    r"[^)\]]+\s+(?:presents|pres\.?)\s+[^)\]]*)"
+    r"[^)\]]+\s+(?:presents|pres\.?)\s+[^)\]]*|"
+    r"[^)\]]+(?:'s)?\s+(?:Remix|Mix|Edit|Rework|Refix|Bootleg|VIP|Flip)|"
+    r"Remix)"
     r"[\]\)]\s*",
     re.IGNORECASE,
 )
@@ -296,7 +300,7 @@ def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> lis
                 label=label,
                 year=year,
                 remixer="",
-                album=str(result.get("title", "")),
+                album=title,
                 mix="",
                 styles=styles,
                 duration_seconds=None,

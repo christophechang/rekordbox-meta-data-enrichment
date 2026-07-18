@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 
 from enricher.models import CandidateMatch, TrackRecord
-from enricher.scorer import filter_styles_by_bpm, score_all, score_candidate
+from enricher.scorer import (
+    _artist_score,
+    _genre_bonus,
+    _strip_remix,
+    filter_styles_by_bpm,
+    score_all,
+    score_candidate,
+)
 
 
 def _make_track(artist: str = "DJ Example", title: str = "Some Track", duration: int = 360) -> TrackRecord:
@@ -123,3 +130,21 @@ def test_filter_styles_by_bpm_zero_bpm_returns_all() -> None:
 def test_filter_styles_bpm_boundary_cases(bpm: float, style: str, expected_in: bool) -> None:
     result = filter_styles_by_bpm([style], bpm)
     assert (style in result) == expected_in
+
+
+def test_remix_re_strips_artist_remix_suffix() -> None:
+    assert _strip_remix("Fall Down (Calibre Remix)") == "Fall Down"
+    assert _strip_remix("Move Your Body (Shadow Child Extended Remix)") == "Move Your Body"
+
+
+def test_artist_containment_requires_min_length() -> None:
+    # "Ben" ⊂ "Benny Benassi" must NOT score as containment
+    assert _artist_score("Ben", "Benny Benassi") < 0.35
+    # Legitimate containment still works
+    assert _artist_score("Dusky", "Dusky feat. Solomon Grey") == 0.35
+
+
+def test_genre_bonus_covers_dubstep_and_disco() -> None:
+    assert _genre_bonus("Dubstep", "discogs") == 0.05
+    assert _genre_bonus("Nu-Disco", "discogs") == 0.05
+    assert _genre_bonus("Hip Hop", "discogs") == 0.05

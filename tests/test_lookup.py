@@ -10,7 +10,9 @@ from httpx import Response
 
 from enricher.lookup import (
     SourceLookupError,
+    _clean_title,
     _escape_lucene,
+    _extract_discogs_candidates,
     _primary_artist,
     _strip_mix_designators,
     lookup_discogs,
@@ -255,20 +257,14 @@ async def test_mb_503_retries_then_succeeds() -> None:
 async def test_mb_fallback_ladder_fires_in_order() -> None:
     # Spec §7: attempts 1→2→3 with (full artist, clean title) → (primary artist, clean title)
     # → (primary artist, designator-stripped title), each firing only on empty results.
-    #
-    # NOTE: brief used "(Calibre Remix)" as the third-rung designator, but the
-    # `(Artist Remix)` pattern is added to _MIX_DESIGNATOR_RE in Task 6 ("Matching
-    # fixes" — see docs/superpowers/specs/2026-07-18-enrich-in-transit-design.md §4.6),
-    # not here. "(Extended Mix)" already strips under the current regex, so it exercises
-    # the same three-rung cascade without depending on unimplemented Task 6 behaviour.
     route = respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})
-    track = _track(name="Fall Down (Extended Mix)", artist="Roni Size & Krust")
+    track = _track(name="Fall Down (Calibre Remix)", artist="Roni Size & Krust")
     await lookup_musicbrainz(track)
     queries = [httpx.URL(c.request.url).params["query"] for c in route.calls]
     assert len(queries) == 3
     assert "Krust" in queries[0]
     assert "Krust" not in queries[1] and "Roni Size" in queries[1]
-    assert "Extended" not in queries[2] and "Fall Down" in queries[2]
+    assert "Calibre" not in queries[2] and "Fall Down" in queries[2]
 
 
 # ---------------------------------------------------------------------------
@@ -356,3 +352,48 @@ def test_primary_artist_extracts_first_credit(artist: str, expected: str) -> Non
 )
 def test_strip_mix_designators_removes_qualifiers(title: str, expected: str) -> None:
     assert _strip_mix_designators(title) == expected
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Move Your Body (Shadow Child Extended Remix)", "Move Your Body"),
+        ("Fall Down (Calibre Remix)", "Fall Down"),
+        ("Track (Somebody's Flip)", "Track"),
+    ],
+)
+def test_strip_mix_designators_handles_artist_remix(title: str, expected: str) -> None:
+    assert _strip_mix_designators(title) == expected
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _clean_title / _TRAILING_BPM_RE (Task 6: MIK-artefact-only)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Keep On 7A", "Keep On"),
+        ("Keep On 7A 128", "Keep On"),
+        ("Keep On 128 7A", "Keep On"),
+        ("Xpander 2", "Xpander 2"),  # bare numbers are legitimate title content
+        ("Vol. 3", "Vol. 3"),
+    ],
+)
+def test_trailing_bpm_only_strips_mik_artefacts(title: str, expected: str) -> None:
+    assert _clean_title(title) == expected
+
+
+# ---------------------------------------------------------------------------
+# Unit test for Discogs album extraction (Task 6: release title, not artist-prefixed)
+# ---------------------------------------------------------------------------
+
+
+def test_discogs_album_is_release_title_not_artist_prefixed() -> None:
+    data: dict[str, object] = {
+        "results": [{"id": 1, "title": "Kerri Chandler - Hemisphere", "year": 1997, "label": ["Shelter"]}]
+    }
+    cands = _extract_discogs_candidates(data, "Ladbroke Grove")
+    assert cands[0].album == "Hemisphere"
+    assert cands[0].artist == "Kerri Chandler"
