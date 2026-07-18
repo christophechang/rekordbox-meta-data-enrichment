@@ -232,6 +232,8 @@ python -m enricher [OPTIONS]
 python -m enricher --limit 10 --no-cache --dry-run
 
 # Full run (default — colour confidence on, all sources: beatport → discogs → musicbrainz, LLM enabled)
+# First v2 run against a library you've enriched before? Delete .enrichment_cache.json first —
+# v1-migrated entries predate Beatport and would otherwise replay without ever querying it.
 python -m enricher
 
 # Strict mode — only apply high-confidence matches
@@ -333,7 +335,9 @@ All LLM keys are optional. With none configured, a startup warning is printed an
 
 ### Cache
 
-Results are stored in `.enrichment_cache.json` — **raw lookup candidates only, never decisions.** Every run re-scores the cached candidates against the track's current state and the active CLI flags, so a manual correction made in Rekordbox, a changed `--confidence-threshold`, or a different `--sources`/`--no-colour-confidence` all take effect immediately on a cache hit.
+Results are stored in `.enrichment_cache.json` — **raw lookup candidates only, never decisions.** Every run re-scores the cached candidates against the track's current state and the active CLI flags, so a manual correction made in Rekordbox, a changed `--confidence-threshold`, or `--no-colour-confidence` all take effect immediately on a cache hit.
+
+`--sources` is the exception: a cache hit replays its stored candidates as-is and skips all lookups entirely, regardless of which sources are currently selected — the candidates on disk already reflect whatever sources produced them on the original, uncached run. To re-query a track against a different `--sources` value, delete `.enrichment_cache.json` (or the relevant entries) or run with `--no-cache`.
 
 - **Never cached:** empty candidate lists (no-match) and API errors — both retried on every run, so query improvements or a flaky API automatically recover previously-missed tracks.
 - **Already-complete tracks bypass the cache entirely** — completeness is checked first, before any cache lookup, so the cache can never re-clobber a track you've since filled in by hand.
