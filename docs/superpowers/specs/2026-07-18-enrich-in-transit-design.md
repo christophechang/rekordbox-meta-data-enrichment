@@ -17,6 +17,7 @@ Environment facts: Rekordbox 7.2.16 on MacBook Air (audio files + master.db ther
 
 ## 2. Decisions (locked with operator)
 
+- **Enriched fields = Label, Year, Remixer, plus the Colour confidence channel. Nothing else.** Mood tags and Comments are never written: the `/* … */` tag block is operator-curated taste data (MixLab's highest-signal input) and the `7A - Energy N` prefix belongs to Mixed In Key. No external source has heard the track; AI-guessed moods would be fabrication. Mood *suggestions* (report-only) are a "Later" item.
 - **Fill-blank-only** write policy. Never replace a non-empty field. `--replace` reserved as future explicit opt-in (not built now).
 - **Auto-apply, no review UI.** Colour confidence contract unchanged: green ≥0.85, orange 0.65–0.85, red <0.65 (matches MixLab's reader).
 - **Year semantics**: title carries a remix designator → the remix's release year; otherwise earliest release year of that recording (remaster collapses to original). Mix-level recording identity.
@@ -115,18 +116,20 @@ Existing pytest/respx style; no live calls by default.
 - **Milestone 2 — backfill**: one supervised run over the current export; 519 labels filled; operator imports; verify in Rekordbox.
 - **Milestone 3 — Beatport + year rule** (§4 items 3, 5, 7, 8) — can swap ahead of milestone 2 if credentials are ready; backfill benefits from Beatport.
 - **Milestone 4 — daemon + outputs** (§5) + Mini deployment + reverse copy.
-- **Later / separate specs**: verify-pass on existing years (report-only, flags repress-year suspects from earlier runs); TuneFinder snapshot consumption; purchase ledger (TuneFinder "bought" feedback → enricher source position 0); pyrekordbox db-write agent (only if import friction ever matters); genre normalisation (needs the single-taxonomy decision across MixLab/mixlab-web/TuneFinder/enricher).
+- **Later / separate specs**: verify-pass on existing years (report-only, flags repress-year suspects from earlier runs); TuneFinder snapshot consumption; purchase ledger (TuneFinder "bought" feedback → enricher source position 0); pyrekordbox db-write agent (only if import friction ever matters); genre normalisation (needs the single-taxonomy decision across MixLab/mixlab-web/TuneFinder/enricher); mood-tag suggestions — report/Discord only, drawn from Discogs/Beatport styles ∩ the operator's existing Rekordbox tag vocabulary, never written to XML (operator applies tags manually in Rekordbox).
 
 ## 9. Invariants (enforced, documented in code)
 
 - `Name`/`Artist` attributes are never modified (protects MixLab's played/unplayed catalog join, which matches on normalised artist+title).
+- `Comments` is never modified, byte-for-byte (carries the MIK `key - Energy N` prefix and the operator's curated `/* mood tags */` block, both parsed by MixLab). Explicit test.
+- Only `Label`, `Year`, `Remixer`, `Colour` attributes are ever written.
 - Source XML is never modified; all outputs are separate files, written atomically.
 - Non-empty fields are never replaced.
 - A failed run leaves the previous enriched XML and import file in place.
 
 ## 10. Out of scope
 
-Genre/mood enrichment, review UI, .NET API changes beyond using the existing uploads endpoint, TuneFinder/MixLab repo changes (except the one-line `MIXLAB_COLLECTION_PATH` note for Mini-side CLI runs), Album enrichment (pollution bug fixed; field not actively enriched), any Rekordbox database writes.
+Genre enrichment, mood/tag/Comments writes of any kind, review UI, .NET API changes beyond using the existing uploads endpoint, TuneFinder/MixLab repo changes (except the one-line `MIXLAB_COLLECTION_PATH` note for Mini-side CLI runs), Album enrichment (pollution bug fixed; field not actively enriched), any Rekordbox database writes.
 
 ## 11. Open implementation items
 
