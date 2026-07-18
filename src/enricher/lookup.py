@@ -375,5 +375,5 @@ async def discogs_master_year(release_id: str, token: str | None) -> str:
                 mst.raise_for_status()
                 mst_data: dict[str, object] = mst.json()
                 return str(mst_data.get("year") or "")
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ValueError):
             return ""

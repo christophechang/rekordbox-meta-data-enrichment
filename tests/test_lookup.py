@@ -436,3 +436,17 @@ async def test_discogs_master_year_resolves_via_master() -> None:
 async def test_discogs_master_year_falls_back_to_release_year() -> None:
     respx.get("https://api.discogs.com/releases/9001").respond(json={"id": 9001, "year": 2019})
     assert await discogs_master_year("9001", token=None) == "2019"
+
+
+@respx.mock
+async def test_discogs_master_year_soft_fails_on_http_error() -> None:
+    respx.get("https://api.discogs.com/releases/9001").respond(status_code=500)
+    assert await discogs_master_year("9001", token=None) == ""
+
+
+@respx.mock
+async def test_discogs_master_year_soft_fails_on_malformed_body() -> None:
+    respx.get("https://api.discogs.com/releases/9001").respond(
+        status_code=200, content=b"<html>gateway error</html>", headers={"Content-Type": "text/html"}
+    )
+    assert await discogs_master_year("9001", token=None) == ""
