@@ -9,6 +9,7 @@ from factories import _candidate, _track
 
 from enricher.cache import EnrichmentCache, NullCache
 from enricher.enricher import _fields_changed, process_track
+from enricher.lookup import SourceLookupError
 from enricher.models import CandidateMatch, TrackRecord
 
 
@@ -281,3 +282,21 @@ async def test_source_order_beatport_first_skips_others_when_confident(
     )
     assert decision.status == "enriched"
     assert bp.called and not discogs.called and not mb.called
+
+
+# ---------------------------------------------------------------------------
+# Discogs errors must surface, not swallow: a SourceLookupError from Discogs
+# aborts the whole track (skipped_api_error) and nothing is cached — mirrors
+# MusicBrainz's existing containment so a partial candidate list never poisons
+# the cache (final review fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_discogs_source_lookup_error_yields_skipped_api_error(tmp_path: Path) -> None:
+    cache = EnrichmentCache(tmp_path / "cache.json")
+    with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
+        mock_discogs.side_effect = SourceLookupError("discogs", "boom")
+        decision = await process_track(_make_track(), cache=cache, sources="both", use_llm=False)
+    assert decision.status == "skipped_api_error"
+    assert cache.get("DJ Example", "Some Track") is None

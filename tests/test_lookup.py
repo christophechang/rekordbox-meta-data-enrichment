@@ -204,10 +204,11 @@ async def test_lookup_discogs_does_not_map_format_to_mix() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_lookup_discogs_returns_empty_on_error() -> None:
+async def test_lookup_discogs_raises_source_lookup_error() -> None:
     respx.get("https://api.discogs.com/database/search").mock(return_value=Response(429))
-    candidates = await lookup_discogs(_TRACK, token=None)
-    assert candidates == []
+    with pytest.raises(SourceLookupError) as exc_info:
+        await lookup_discogs(_TRACK, token=None)
+    assert exc_info.value.source == "discogs"
 
 
 # ---------------------------------------------------------------------------

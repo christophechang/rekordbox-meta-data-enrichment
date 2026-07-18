@@ -340,8 +340,8 @@ async def _discogs_query(artist: str, title: str, track_name: str, token: str | 
                 resp.raise_for_status()
                 ddata: dict[str, object] = resp.json()
                 return _extract_discogs_candidates(ddata, track_name)
-        except Exception:
-            return []
+        except httpx.HTTPError as exc:
+            raise SourceLookupError("discogs", str(exc)) from exc
 
 
 async def lookup_discogs(track: TrackRecord, token: str | None = None) -> list[CandidateMatch]:
