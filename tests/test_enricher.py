@@ -4,9 +4,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from factories import _candidate, _track
 
 from enricher.cache import EnrichmentCache
-from enricher.enricher import process_track
+from enricher.enricher import _fields_changed, process_track
 from enricher.models import CandidateMatch, TrackRecord
 
 
@@ -84,43 +85,6 @@ async def test_process_track_uses_cache_on_second_call(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_track_writes_bpm_filtered_styles_to_mix(tmp_path: Path) -> None:
-    """Discogs styles compatible with the track BPM should appear in match.mix."""
-    cache = EnrichmentCache(tmp_path / "cache.json")
-    # Track at 130 BPM — Drum n Bass (158-185) must be filtered out, Breakbeat kept
-    track = TrackRecord(
-        track_id="1",
-        name="Some Track",
-        artist="DJ Example",
-        genre="Breakbeat",
-        bpm=130.0,
-        tonality="4A",
-        duration_seconds=360,
-    )
-    candidate = CandidateMatch(
-        source="discogs",
-        source_id="x",
-        artist="DJ Example",
-        title="Some Track",
-        label="Punks",
-        year="2021",
-        confidence=0.0,
-        duration_seconds=362,
-        styles=["Breakbeat", "Drum n Bass", "Speed Garage"],
-    )
-    with patch("enricher.enricher.lookup_musicbrainz", new_callable=AsyncMock) as mock_mb:
-        mock_mb.return_value = [candidate]
-        with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
-            mock_discogs.return_value = []
-            decision = await process_track(track, cache=cache)
-    assert decision.status == "enriched"
-    assert decision.match is not None
-    assert "Breakbeat" in decision.match.mix
-    assert "Speed Garage" in decision.match.mix
-    assert "Drum n Bass" not in decision.match.mix
-
-
-@pytest.mark.asyncio
 async def test_process_track_no_llm_skips_low_confidence(tmp_path: Path) -> None:
     cache = EnrichmentCache(tmp_path / "cache.json")
     low_conf = CandidateMatch(
@@ -139,3 +103,24 @@ async def test_process_track_no_llm_skips_low_confidence(tmp_path: Path) -> None
             mock_discogs.return_value = []
             decision = await process_track(_make_track(), cache=cache, use_llm=False)
     assert decision.status in ("skipped_low_confidence", "skipped_no_match", "enriched")
+
+
+def test_fields_changed_fills_blank_fields_only() -> None:
+    track = _track(label="", year="2022", remixer="")
+    match = _candidate(label="Club Glow", year="2019", remixer="Someone")
+    changes = _fields_changed(track, match)
+    assert changes == {"label": ("", "Club Glow"), "remixer": ("", "Someone")}
+    # year is non-empty on the track: never replaced, even though the match disagrees
+
+
+def test_fields_changed_never_proposes_album_or_mix() -> None:
+    track = _track(label="", album="", mix="")
+    match = _candidate(label="Club Glow", album="Some Album", mix="Club Mix")
+    changes = _fields_changed(track, match)
+    assert set(changes) == {"label"}
+
+
+def test_fields_changed_empty_when_track_complete() -> None:
+    track = _track(label="Hotflush", year="2015", remixer="")
+    match = _candidate(label="Other", year="1999", remixer="")
+    assert _fields_changed(track, match) == {}
