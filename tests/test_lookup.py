@@ -15,6 +15,7 @@ from enricher.lookup import (
     _strip_mix_designators,
     lookup_discogs,
     lookup_musicbrainz,
+    mb_recording_details,
 )
 from enricher.models import TrackRecord
 
@@ -268,6 +269,34 @@ async def test_mb_fallback_ladder_fires_in_order() -> None:
     assert "Krust" in queries[0]
     assert "Krust" not in queries[1] and "Roni Size" in queries[1]
     assert "Extended" not in queries[2] and "Fall Down" in queries[2]
+
+
+# ---------------------------------------------------------------------------
+# MB recording-detail follow-up: label/remixer restored via the lookup
+# endpoint, since search responses never carry them (Task 5)
+# ---------------------------------------------------------------------------
+
+_MB_DETAIL_RESPONSE = {
+    "id": "mbid-1",
+    "title": "Ladbroke Grove",
+    "releases": [
+        {
+            "title": "Hemisphere",
+            "date": "1997-06-02",
+            "release-group": {"secondary-types": []},
+            "label-info": [{"label": {"name": "Shelter Records"}}],
+        }
+    ],
+    "relations": [{"type": "remixer", "artist": {"name": "DJ Deep"}}],
+}
+
+
+@respx.mock
+async def test_mb_recording_details_extracts_label_and_remixer() -> None:
+    respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    label, remixer = await mb_recording_details("mbid-1")
+    assert label == "Shelter Records"
+    assert remixer == "DJ Deep"
 
 
 def test_escape_lucene() -> None:

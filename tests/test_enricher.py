@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import respx
 from factories import _candidate, _track
 
 from enricher.cache import EnrichmentCache, NullCache
@@ -57,7 +58,9 @@ async def test_process_track_enriches_on_high_confidence(tmp_path: Path) -> None
         mock_mb.return_value = [_high_conf_candidate()]
         with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
             mock_discogs.return_value = []
-            decision = await process_track(_make_track(), cache=cache)
+            with patch("enricher.enricher.mb_recording_details", new_callable=AsyncMock) as mock_detail:
+                mock_detail.return_value = ("", "")
+                decision = await process_track(_make_track(), cache=cache)
     assert decision.status == "enriched"
     assert decision.fields_changed.get("label") == ("", "Defected")
 
@@ -91,8 +94,10 @@ async def test_process_track_uses_cache_on_second_call(tmp_path: Path) -> None:
         mock_mb.return_value = [_high_conf_candidate()]
         with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
             mock_discogs.return_value = []
-            await process_track(_make_track(), cache=cache)
-            await process_track(_make_track(), cache=cache)
+            with patch("enricher.enricher.mb_recording_details", new_callable=AsyncMock) as mock_detail:
+                mock_detail.return_value = ("", "")
+                await process_track(_make_track(), cache=cache)
+                await process_track(_make_track(), cache=cache)
     assert mock_mb.call_count == 1  # second call served from cache
 
 
@@ -133,8 +138,68 @@ async def test_process_track_no_llm_skips_low_confidence(tmp_path: Path) -> None
         mock_mb.return_value = [low_conf]
         with patch("enricher.enricher.lookup_discogs", new_callable=AsyncMock) as mock_discogs:
             mock_discogs.return_value = []
-            decision = await process_track(_make_track(), cache=cache, use_llm=False)
+            with patch("enricher.enricher.mb_recording_details", new_callable=AsyncMock) as mock_detail:
+                mock_detail.return_value = ("", "")
+                decision = await process_track(_make_track(), cache=cache, use_llm=False)
     assert decision.status in ("skipped_low_confidence", "skipped_no_match", "enriched")
+
+
+# ---------------------------------------------------------------------------
+# MB recording-detail follow-up: process_track fetches label/remixer via the
+# lookup endpoint only when the winning MB candidate needs them, and the
+# merged result must be cached (Task 5)
+# ---------------------------------------------------------------------------
+
+_MB_SEARCH_RESPONSE = {
+    "recordings": [
+        {
+            "id": "mbid-1",
+            "title": "Ladbroke Grove",
+            "length": 372000,
+            "first-release-date": "1997-06-02",
+            "artist-credit": [{"artist": {"name": "Kerri Chandler"}}],
+            "releases": [
+                {"title": "Hemisphere", "date": "1997-06-02", "release-group": {"secondary-types": []}},
+            ],
+        }
+    ]
+}
+
+_MB_DETAIL_RESPONSE = {
+    "id": "mbid-1",
+    "title": "Ladbroke Grove",
+    "releases": [
+        {
+            "title": "Hemisphere",
+            "date": "1997-06-02",
+            "release-group": {"secondary-types": []},
+            "label-info": [{"label": {"name": "Shelter Records"}}],
+        }
+    ],
+    "relations": [{"type": "remixer", "artist": {"name": "DJ Deep"}}],
+}
+
+
+@respx.mock
+async def test_detail_lookup_only_fires_when_needed(tmp_path: Path) -> None:
+    # Winning MB candidate already satisfies the track's blank fields → no detail call.
+    respx.get("https://musicbrainz.org/ws/2/recording/").respond(json=_MB_SEARCH_RESPONSE)
+    detail_route = respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="Already Set", year="", remixer="Set Too")
+    cache = EnrichmentCache(tmp_path / "c.json")
+    await process_track(track, cache=cache, sources="musicbrainz", use_llm=False, colour_confidence=True)
+    assert not detail_route.called
+
+
+@respx.mock
+async def test_detail_result_is_cached_with_candidates(tmp_path: Path) -> None:
+    respx.get("https://musicbrainz.org/ws/2/recording/").respond(json=_MB_SEARCH_RESPONSE)
+    respx.get("https://musicbrainz.org/ws/2/recording/mbid-1").respond(json=_MB_DETAIL_RESPONSE)
+    track = _track(name="Ladbroke Grove", artist="Kerri Chandler", label="", year="")
+    cache = EnrichmentCache(tmp_path / "c.json")
+    await process_track(track, cache=cache, sources="musicbrainz", use_llm=False, colour_confidence=True)
+    cached = cache.get("Kerri Chandler", "Ladbroke Grove")
+    assert cached is not None and cached[0].label == "Shelter Records"
 
 
 def test_fields_changed_fills_blank_fields_only() -> None:

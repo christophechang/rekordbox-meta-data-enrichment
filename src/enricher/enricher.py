@@ -4,7 +4,7 @@ import sys
 
 from enricher.cache import CacheProtocol
 from enricher.disambiguator import disambiguate
-from enricher.lookup import lookup_discogs, lookup_musicbrainz
+from enricher.lookup import lookup_discogs, lookup_musicbrainz, mb_recording_details
 from enricher.models import CandidateMatch, EnrichmentDecision, TrackRecord
 from enricher.scorer import score_all
 
@@ -105,6 +105,21 @@ async def process_track(
             best_has_label = bool(scored_probe[0].label) if scored_probe else False
             if sources in ("discogs", "both") and (best_score < confidence_threshold or not best_has_label):
                 candidates.extend(await lookup_discogs(track, token=discogs_token))
+
+            # MB search can't supply label/remixer — fetch details once when the winner needs them
+            probe = score_all(track, candidates)
+            if probe and probe[0].source == "musicbrainz" and probe[0].source_id:
+                best_probe = probe[0]
+                needs_label = not track.label and not best_probe.label
+                needs_remixer = not track.remixer and not best_probe.remixer
+                if needs_label or needs_remixer:
+                    label, remixer = await mb_recording_details(best_probe.source_id)
+                    for i, c in enumerate(candidates):
+                        if c.source == "musicbrainz" and c.source_id == best_probe.source_id:
+                            candidates[i] = c.model_copy(
+                                update={"label": c.label or label, "remixer": c.remixer or remixer}
+                            )
+                            break
         except Exception as exc:
             print(f"ERROR lookup failed for {track.artist} — {track.name}: {exc}", file=sys.stderr)
             return EnrichmentDecision(
