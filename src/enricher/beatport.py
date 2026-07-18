@@ -87,7 +87,12 @@ def _extract_bp_candidates(data: dict[str, object]) -> list[CandidateMatch]:
                 duration_seconds=int(length_ms) // 1000 if isinstance(length_ms, int) else None,
             )
         )
-    return out
+    # Year rule: no remix designator → earliest release year wins. Sort ascending by
+    # year with blanks last so that when score_all later finds two candidates tied on
+    # confidence (identical name+mix+artist — e.g. an original vs. a Beatport reissue),
+    # its stable sort preserves this order and the EARLIEST Beatport publish year is
+    # the one that ends up first, i.e. the winner.
+    return sorted(out, key=lambda c: (c.year == "", c.year))
 
 
 async def lookup_beatport(track: TrackRecord) -> list[CandidateMatch]:

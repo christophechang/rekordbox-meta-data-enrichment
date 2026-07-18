@@ -69,3 +69,46 @@ async def test_beatport_missing_credentials_raise(monkeypatch: pytest.MonkeyPatc
         monkeypatch.delenv(var, raising=False)
     with pytest.raises(SourceLookupError):
         await lookup_beatport(_track(name="X", artist="Y"))
+
+
+# ---------------------------------------------------------------------------
+# Year rule: no remix designator → earliest release year wins (final review fix).
+# Among Beatport candidates that score identically (same name/mix/artist — e.g.
+# an original vs. a Beatport reissue), the earliest publish year must surface
+# first so it wins the confidence tie downstream in score_all's stable sort.
+# ---------------------------------------------------------------------------
+
+_BP_TIE_RESPONSE = {
+    "results": [
+        # Listed newer-first on purpose — proves the sort actually reorders rather
+        # than coincidentally matching API order.
+        {
+            "id": 1,
+            "name": "Keep On",
+            "mix_name": "Original Mix",
+            "artists": [{"name": "Denham Audio"}],
+            "release": {"name": "Keep On (Reissue)", "label": {"name": "Club Glow"}},
+            "publish_date": "2019-05-01",
+            "length_ms": 300000,
+        },
+        {
+            "id": 2,
+            "name": "Keep On",
+            "mix_name": "Original Mix",
+            "artists": [{"name": "Denham Audio"}],
+            "release": {"name": "Keep On EP", "label": {"name": "Club Glow"}},
+            "publish_date": "1999-03-01",
+            "length_ms": 300000,
+        },
+    ]
+}
+
+
+@respx.mock
+async def test_earliest_publish_year_wins_confidence_ties(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BEATPORT_API_TOKEN", "static-token")
+    respx.get("https://api.beatport.com/v4/catalog/tracks/").respond(json=_BP_TIE_RESPONSE)
+    track = _track(name="Keep On", artist="Denham Audio")
+    cands = await lookup_beatport(track)
+    assert cands[0].year == "1999"
+    assert cands[0].source_id == "2"

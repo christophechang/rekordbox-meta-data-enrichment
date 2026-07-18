@@ -317,7 +317,7 @@ score = artist_similarity (0–0.40)
 
 - **Title carries a remix designator** (`Remix`, `Rework`, `Refix`, `Flip`, `VIP`, `Bootleg`) — the year is that remix's own release year.
 - **No remix designator** (`Original Mix`, `Extended Mix`, `Radio Edit`, `Remaster`, or nothing at all) — the year is the *earliest* release year of the recording: MusicBrainz's recording-level `first-release-date`, or for Discogs, a follow-up lookup resolves the release to its master year. A remaster collapses to its original's year, never the remaster's own release date.
-- Beatport needs no extra resolution step — it's mix-level by nature, so its `publish_date` already matches whichever mix was queried.
+- **Beatport year is that track's earliest Beatport publish date** among the candidates a query returns — when two candidates score identically (same name/mix/artist, e.g. an original vs. a Beatport reissue), the earlier `publish_date` wins the tie. This is only as accurate as Beatport's own catalogue: pre-Beatport-era originals (pre ~2004) still resolve correctly via the Discogs-master / MusicBrainz-first-release-date path above whenever Beatport's candidates lack a year or tie with each other, but a re-release that's the *only* version Beatport has indexed may still carry that reissue's year.
 
 ### LLM disambiguation
 
