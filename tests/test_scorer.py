@@ -6,6 +6,7 @@ from enricher.models import CandidateMatch, TrackRecord
 from enricher.scorer import (
     _artist_score,
     _genre_bonus,
+    _mix_score,
     _strip_remix,
     filter_styles_by_bpm,
     score_all,
@@ -158,3 +159,14 @@ def test_genre_bonus_covers_dubstep_and_disco() -> None:
     assert _genre_bonus("Dubstep", "discogs") == 0.05
     assert _genre_bonus("Nu-Disco", "discogs") == 0.05
     assert _genre_bonus("Hip Hop", "discogs") == 0.05
+
+
+def test_mix_score_penalises_original_vs_remix_mismatch() -> None:
+    # Track is a remix, candidate is the original mix → penalty
+    assert _mix_score("Fall Down (Calibre Remix)", "Original Mix") == -0.10
+    # Track is original, candidate is a remix → penalty
+    assert _mix_score("Fall Down", "Calibre Remix") == -0.10
+    # Matching remix name → reward
+    assert _mix_score("Fall Down (Calibre Remix)", "Calibre Remix") == 0.05
+    # No mix info → neutral
+    assert _mix_score("Fall Down", "") == 0.0

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sys
 
+from enricher.beatport import lookup_beatport
 from enricher.cache import CacheProtocol
 from enricher.disambiguator import disambiguate
 from enricher.lookup import (
+    SourceLookupError,
     discogs_master_year,
     has_remix_designator,
     lookup_discogs,
@@ -103,14 +105,24 @@ async def process_track(
     if not cache_hit:
         # --- Live lookup ---
         try:
-            if sources in ("musicbrainz", "both"):
-                candidates.extend(await lookup_musicbrainz(track))
 
-            scored_probe = score_all(track, candidates)
-            best_score = scored_probe[0].confidence if scored_probe else 0.0
-            best_has_label = bool(scored_probe[0].label) if scored_probe else False
-            if sources in ("discogs", "both") and (best_score < confidence_threshold or not best_has_label):
+            def _confident(cands: list[CandidateMatch]) -> bool:
+                s = score_all(track, cands)
+                return bool(s) and s[0].confidence >= confidence_threshold and bool(s[0].label)
+
+            if sources in ("beatport", "all"):
+                try:
+                    candidates.extend(await lookup_beatport(track))
+                except SourceLookupError as exc:
+                    if "no credentials" not in str(exc):
+                        raise
+                    print(f"WARNING: beatport skipped — {exc}", file=sys.stderr)
+
+            if sources in ("discogs", "both", "all") and not _confident(candidates):
                 candidates.extend(await lookup_discogs(track, token=discogs_token))
+
+            if sources in ("musicbrainz", "both", "all") and not _confident(candidates):
+                candidates.extend(await lookup_musicbrainz(track))
 
             # MB search can't supply label/remixer — fetch details once when the winner needs them
             probe = score_all(track, candidates)
@@ -141,7 +153,7 @@ async def process_track(
                         if c.source == "discogs" and c.source_id == probe[0].source_id:
                             candidates[i] = c.model_copy(update={"year": master_year})
                             break
-        except Exception as exc:
+        except SourceLookupError as exc:
             print(f"ERROR lookup failed for {track.artist} — {track.name}: {exc}", file=sys.stderr)
             return EnrichmentDecision(
                 track_id=track.track_id,

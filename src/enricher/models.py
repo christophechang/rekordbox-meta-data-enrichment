@@ -21,7 +21,7 @@ class TrackRecord(BaseModel):
 
 
 class CandidateMatch(BaseModel):
-    source: Literal["musicbrainz", "discogs"]
+    source: Literal["musicbrainz", "discogs", "beatport"]
     source_id: str
     artist: str
     title: str

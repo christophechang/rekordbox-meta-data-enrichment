@@ -61,9 +61,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--sources",
-        choices=["musicbrainz", "discogs", "both"],
-        default="both",
-        help="Which metadata sources to query (default: both)",
+        choices=["beatport", "musicbrainz", "discogs", "both", "all"],
+        default="all",
+        help="Which metadata sources to query (default: all = beatport → discogs → musicbrainz; 'both' = musicbrainz+discogs, legacy)",
     )
     parser.add_argument("--no-llm", action="store_true", help="Disable LLM disambiguation (auto-confidence only)")
     parser.add_argument(

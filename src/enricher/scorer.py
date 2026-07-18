@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from enricher.lookup import has_remix_designator
 from enricher.models import CandidateMatch, TrackRecord
 
 # Remix suffix patterns to strip when comparing titles
@@ -189,14 +190,31 @@ def _genre_bonus(track_genre: str, candidate_source: str) -> float:
     return 0.0
 
 
+def _mix_score(track_title: str, candidate_mix: str) -> float:
+    """Reward mix-name agreement, punish original-vs-remix mismatch.
+
+    Only Beatport candidates carry mix names; others return 0.0 (neutral).
+    """
+    if not candidate_mix:
+        return 0.0
+    track_is_remix = has_remix_designator(track_title)
+    cand_is_remix = has_remix_designator(f"({candidate_mix})")
+    if track_is_remix != cand_is_remix:
+        return -0.10
+    if track_is_remix and _normalise(candidate_mix) in _normalise(track_title):
+        return 0.05
+    return 0.02
+
+
 def score_candidate(track: TrackRecord, candidate: CandidateMatch) -> float:
     score = (
         _artist_score(track.artist, candidate.artist)
         + _title_score(track.name, candidate.title)
         + _duration_score(track.duration_seconds, candidate.duration_seconds)
         + _genre_bonus(track.genre, candidate.source)
+        + _mix_score(track.name, candidate.mix)
     )
-    return min(round(score, 4), 1.0)
+    return max(min(round(score, 4), 1.0), 0.0)
 
 
 def score_all(track: TrackRecord, candidates: list[CandidateMatch]) -> list[CandidateMatch]:

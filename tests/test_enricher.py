@@ -242,3 +242,42 @@ async def test_original_title_gets_master_year_merged_before_cache(tmp_path: Pat
     assert decision.fields_changed.get("year") == ("", "1994")
     cached = cache.get("Artist", "Release")
     assert cached is not None and cached[0].year == "1994"  # refined year persisted with candidates
+
+
+# ---------------------------------------------------------------------------
+# Source ordering: Beatport is the primary source. When it returns a confident,
+# labelled match, Discogs and MusicBrainz are never queried (Task 8)
+# ---------------------------------------------------------------------------
+
+_BP_TRACKS_RESPONSE = {
+    "results": [
+        {
+            "id": 777,
+            "name": "Fall Down",
+            "mix_name": "Calibre Remix",
+            "artists": [{"name": "Roni Size"}],
+            "remixers": [{"name": "Calibre"}],
+            "release": {"name": "Fall Down EP", "label": {"name": "V Recordings"}},
+            "publish_date": "2019-03-01",
+            "length_ms": 372000,
+            "genre": {"name": "Drum & Bass"},
+            "isrc": "GBABC1900123",
+        }
+    ]
+}
+
+
+@respx.mock
+async def test_source_order_beatport_first_skips_others_when_confident(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("BEATPORT_API_TOKEN", "t")
+    bp = respx.get("https://api.beatport.com/v4/catalog/tracks/").respond(json=_BP_TRACKS_RESPONSE)
+    discogs = respx.get("https://api.discogs.com/database/search").respond(json={"results": []})
+    mb = respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})
+    track = _track(name="Fall Down (Calibre Remix)", artist="Roni Size", label="", year="", duration_seconds=372)
+    decision = await process_track(
+        track, cache=EnrichmentCache(tmp_path / "c.json"), sources="all", use_llm=False, colour_confidence=True
+    )
+    assert decision.status == "enriched"
+    assert bp.called and not discogs.called and not mb.called
