@@ -177,18 +177,18 @@ OPENROUTER_API_KEY=
 # Optional but recommended: raises rate limit from 25 to 60 req/min
 DISCOGS_TOKEN=
 
-# Beatport — primary metadata source. Either a static token OR client
-# credentials. Optional — leave blank to skip Beatport (falls back to Discogs → MusicBrainz)
-BEATPORT_API_TOKEN=
-BEATPORT_CLIENT_ID=
-BEATPORT_CLIENT_SECRET=
+# Beatport — primary metadata source. Your account username + password drive a
+# PKCE authorization-code login. Optional — leave blank to skip Beatport (falls
+# back to Discogs → MusicBrainz)
+BEATPORT_USERNAME=
+BEATPORT_PASSWORD=
 ```
 
 Every key above is optional:
 
 - **LLM keys** — Mistral is preferred; Groq, Gemini, and OpenRouter (tried twice: `openrouter/auto`, then `mistralai/mistral-small`) are free-tier fallbacks. Used only for the 0.65–0.85 confidence band — with none configured, a startup warning is printed and that band is simply skipped.
 - **`DISCOGS_TOKEN`** — works unauthenticated too, just slower.
-- **Beatport credentials** (`BEATPORT_API_TOKEN`, or `BEATPORT_CLIENT_ID` + `BEATPORT_CLIENT_SECRET`) — without them, Beatport is skipped with a warning and lookup falls back to Discogs → MusicBrainz.
+- **Beatport credentials** (`BEATPORT_USERNAME` + `BEATPORT_PASSWORD`) — your account login drives a PKCE authorization-code flow; tokens are cached in a chmod-600 `.beatport_token.json`. Without both, Beatport is skipped with a warning and lookup falls back to Discogs → MusicBrainz.
 
 ---
 
