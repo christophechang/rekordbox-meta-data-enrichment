@@ -43,7 +43,8 @@ _AUTH_HEADERS: dict[str, str] = {
     "Referer": _BP_DOCS_URL,
 }
 # The client_id rotates, so it is scraped from the docs page rather than hardcoded.
-_CLIENT_ID_RE = re.compile(r"""client[_]?id["']?\s*[:=]\s*["']([A-Za-z0-9]{20,})["']""")
+# Case-insensitive: the live bundles expose it as `CLIENT_ID: '...'` (uppercase).
+_CLIENT_ID_RE = re.compile(r"""client[_]?id["']?\s*[:=]\s*["']([A-Za-z0-9]{20,})["']""", re.IGNORECASE)
 _SCRIPT_SRC_RE = re.compile(r"""<script[^>]+src=["']([^"']+)["']""")
 
 # Token cache: a chmod-600 dotfile at the cwd root, alongside .enrichment_cache.json.

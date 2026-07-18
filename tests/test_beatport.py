@@ -206,6 +206,9 @@ async def test_malformed_cache_file_is_ignored() -> None:
 
 def test_client_id_regex_extracts_from_blob() -> None:
     assert beatport._match_client_id(_DOCS_HTML) == _CLIENT_ID
+    # Real Beatport bundle form: uppercase key, colon, single quotes (the case that
+    # broke the live smoke — a case-sensitive regex missed CLIENT_ID).
+    assert beatport._match_client_id("t.exports={CLIENT_ID:'" + _CLIENT_ID + "'}") == _CLIENT_ID
     # unquoted key + '=' assignment form, single quotes
     assert beatport._match_client_id("var clientid = 'ZZZZZZZZZZZZZZZZZZZZ';") == "Z" * 20
     # too short (<20 chars) and absent → no match
