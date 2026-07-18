@@ -60,5 +60,5 @@ def parse_collection(xml_path: Path) -> list[TrackRecord]:
             )
         )
 
-    print(f"Parsed {len(tracks)} tracks, excluded {excluded} SoundCloud tracks.", file=sys.stderr)
+    print(f"Parsed {len(tracks)} tracks, excluded {excluded} tracks (SoundCloud/demo/blank-artist).", file=sys.stderr)
     return tracks

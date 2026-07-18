@@ -111,6 +111,14 @@ async def run(args: argparse.Namespace) -> None:
     sources: str = args.sources
     colour_confidence: bool = not args.no_colour_confidence
 
+    llm_keys = ("MISTRAL_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY")
+    if not args.no_llm and not any(os.environ.get(k) for k in llm_keys):
+        print(
+            "WARNING: LLM disambiguation enabled but no provider keys set — "
+            "the 0.65-0.85 confidence band will be skipped.",
+            file=sys.stderr,
+        )
+
     if args.limit is not None:
         tracks = tracks[: args.limit]
 
@@ -118,15 +126,21 @@ async def run(args: argparse.Namespace) -> None:
     total = len(tracks)
 
     for i, track in enumerate(tracks, 1):
-        decision = await process_track(
-            track,
-            cache=cache,
-            sources=sources,
-            confidence_threshold=args.confidence_threshold,
-            use_llm=not args.no_llm,
-            discogs_token=discogs_token,
-            colour_confidence=colour_confidence,
-        )
+        try:
+            decision = await process_track(
+                track,
+                cache=cache,
+                sources=sources,
+                confidence_threshold=args.confidence_threshold,
+                use_llm=not args.no_llm,
+                discogs_token=discogs_token,
+                colour_confidence=colour_confidence,
+            )
+        except Exception as exc:  # containment: one bad track never kills the run
+            print(f"ERROR unexpected failure for {track.artist} — {track.name}: {exc}", file=sys.stderr)
+            decision = EnrichmentDecision(
+                track_id=track.track_id, artist=track.artist, title=track.name, status="skipped_api_error"
+            )
         decisions.append(decision)
 
         if i % 50 == 0 or i == total:
