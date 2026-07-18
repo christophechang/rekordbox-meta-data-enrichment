@@ -4,9 +4,10 @@ import json
 
 import pytest
 import respx
+from factories import _candidate, _track
 from httpx import Response
 
-from enricher.disambiguator import disambiguate
+from enricher.disambiguator import _build_prompt, _parse_index, disambiguate
 from enricher.models import CandidateMatch, TrackRecord
 
 _TRACK = TrackRecord(
@@ -96,3 +97,42 @@ async def test_disambiguate_returns_minus1_for_empty_candidates() -> None:
     idx, provider = await disambiguate(_TRACK, [])
     assert idx == -1
     assert provider is None
+
+
+def test_parse_index_distinguishes_unparseable_from_uncertain() -> None:
+    assert _parse_index('{"index": -1}', 3) == -1
+    assert _parse_index('{"index": 2}', 3) == 2
+    assert _parse_index("total garbage", 3) is None
+    assert _parse_index('{"index": 9}', 3) is None  # out of range = misbehaviour, not uncertainty
+
+
+def _chat_response(content: str) -> dict[str, object]:
+    return {"choices": [{"message": {"content": content}}]}
+
+
+@respx.mock
+async def test_parse_failure_falls_through_to_next_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MISTRAL_API_KEY", "k1")
+    monkeypatch.setenv("GROQ_API_KEY", "k2")
+    respx.post("https://api.mistral.ai/v1/chat/completions").respond(json=_chat_response("not json at all"))
+    respx.post("https://api.groq.com/openai/v1/chat/completions").respond(json=_chat_response('{"index": 0}'))
+    idx, provider = await disambiguate(_track(), [_candidate()])
+    assert (idx, provider) == (0, "groq")
+
+
+@respx.mock
+async def test_uncertain_answer_stops_cascade(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MISTRAL_API_KEY", "k1")
+    monkeypatch.setenv("GROQ_API_KEY", "k2")
+    respx.post("https://api.mistral.ai/v1/chat/completions").respond(json=_chat_response('{"index": -1}'))
+    groq = respx.post("https://api.groq.com/openai/v1/chat/completions")
+    idx, provider = await disambiguate(_track(), [_candidate()])
+    assert (idx, provider) == (-1, "mistral")
+    assert not groq.called
+
+
+def test_prompt_includes_durations() -> None:
+    track = _track(duration_seconds=372)
+    cand = _candidate(duration_seconds=371)
+    prompt = _build_prompt(track, [cand])
+    assert "372" in prompt and "371" in prompt
