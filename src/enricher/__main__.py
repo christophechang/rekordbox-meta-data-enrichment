@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from datetime import date
@@ -13,7 +14,7 @@ from enricher.cache import CacheProtocol, EnrichmentCache, NullCache
 from enricher.enricher import process_track
 from enricher.models import EnrichmentDecision
 from enricher.reader import parse_collection
-from enricher.reporter import build_report
+from enricher.reporter import build_changes, build_report
 from enricher.writer import write_enriched_xml
 
 load_dotenv()
@@ -168,6 +169,10 @@ async def run(args: argparse.Namespace) -> None:
 
     applied = write_enriched_xml(args.input, args.output, decisions, full_export=args.full_export)
     print(f"Wrote enriched XML to {args.output} ({applied} tracks updated).", file=sys.stderr)
+
+    changes_path = args.output.with_suffix(".changes.json")
+    changes_path.write_text(json.dumps(build_changes(decisions), ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Wrote change list to {changes_path}.", file=sys.stderr)
 
 
 def main() -> None:
