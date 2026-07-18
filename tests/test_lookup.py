@@ -416,6 +416,9 @@ def test_discogs_album_is_release_title_not_artist_prefixed() -> None:
         ("Ladbroke Grove", False),
         ("Song (Radio Edit)", False),
         ("Old Track (2015 Remastered)", False),
+        ("Song (Prefix Mix)", False),
+        ("Track (Premix Edit)", False),
+        ("Trip To The Moon (VIP Dub)", True),
     ],
 )
 def test_has_remix_designator(title: str, expected: bool) -> None:

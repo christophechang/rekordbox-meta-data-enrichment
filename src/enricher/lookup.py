@@ -72,7 +72,7 @@ _MIX_DESIGNATOR_RE = re.compile(
 
 # Remix-TYPE versions get the remix's year; everything else (Original/Extended/Radio/Remaster)
 # is the original recording and gets the earliest release year. Spec §2 year rule.
-_REMIX_MARKER_RE = re.compile(r"[\(\[][^\)\]]*(?:remix|rework|refix|flip|bootleg|vip)[^\)\]]*[\)\]]", re.IGNORECASE)
+_REMIX_MARKER_RE = re.compile(r"[\(\[][^\)\]]*\b(?:remix|rework|refix|flip|bootleg|vip)\b[^\)\]]*[\)\]]", re.IGNORECASE)
 
 # Matches Lucene special characters that must be backslash-escaped in MusicBrainz queries
 _LUCENE_SPECIALS = re.compile(r'(&&|\|\||[+\-!(){}\[\]^"~*?:\\/])')
