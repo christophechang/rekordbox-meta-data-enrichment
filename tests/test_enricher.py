@@ -347,7 +347,9 @@ async def test_beatport_missing_credentials_skips_to_other_sources(
 
 @respx.mock
 async def test_sources_both_never_calls_beatport(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("BEATPORT_API_TOKEN", "t")
+    # Stub auth so beatport WOULD reach the tracks endpoint if 'both' wrongly routed to it;
+    # otherwise the no-credentials skip would mask a routing regression.
+    monkeypatch.setattr("enricher.beatport._get_token", AsyncMock(return_value="tok"))
     bp = respx.get("https://api.beatport.com/v4/catalog/tracks/").respond(json={"results": []})
     respx.get("https://api.discogs.com/database/search").respond(json={"results": []})
     respx.get("https://musicbrainz.org/ws/2/recording/").respond(json={"recordings": []})

@@ -204,6 +204,18 @@ async def test_malformed_cache_file_is_ignored() -> None:
 # ---------------------------------------------------------------------------
 
 
+@respx.mock
+async def test_scrape_falls_back_to_script_bundle() -> None:
+    # Live shape: the docs HTML carries no client_id; it lives in a referenced JS
+    # bundle as CLIENT_ID:'...'. This exercises the fetch-every-script fallback loop.
+    respx.get(_DOCS_URL).respond(content=b'<html><body><script src="/static/btprt/app.js"></script></body></html>')
+    respx.get("https://api.beatport.com/static/btprt/app.js").respond(
+        content=f"t.exports={{CLIENT_ID:'{_CLIENT_ID}'}}".encode()
+    )
+    async with httpx.AsyncClient() as client:
+        assert await beatport._scrape_client_id(client) == _CLIENT_ID
+
+
 def test_client_id_regex_extracts_from_blob() -> None:
     assert beatport._match_client_id(_DOCS_HTML) == _CLIENT_ID
     # Real Beatport bundle form: uppercase key, colon, single quotes (the case that

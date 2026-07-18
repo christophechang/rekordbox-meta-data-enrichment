@@ -110,11 +110,19 @@ def _load_cache() -> _TokenRecord | None:
 
 def _save_cache(record: _TokenRecord) -> None:
     # Best-effort: a persistence failure must not sink a token we already hold.
-    with contextlib.suppress(OSError):
-        tmp = _TOKEN_CACHE_FILE.with_name(f"{_TOKEN_CACHE_FILE.name}.tmp")
-        tmp.write_text(json.dumps(record), encoding="utf-8")
-        os.chmod(tmp, 0o600)
+    # Create the tmp file 0o600 from the start (never a world-readable window), and
+    # remove it if the swap fails so a tokens-bearing .tmp is never left behind.
+    tmp = _TOKEN_CACHE_FILE.with_name(f"{_TOKEN_CACHE_FILE.name}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps(record).encode("utf-8"))
+        finally:
+            os.close(fd)
         os.replace(tmp, _TOKEN_CACHE_FILE)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
 
 
 def _invalidate_cache() -> None:
