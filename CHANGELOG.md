@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Versions before 0.6.0
 are recorded only as git tags (`v0.1.0`–`v0.5.0`).
 
+## [0.6.1] — 2026-07-19
+
+### Fixed
+- **"Updated Tracks" playlist no longer lists unchanged tracks.** In delta mode the
+  playlist was built from whatever survived in the `COLLECTION`, but colour-confidence
+  mode (the default) deliberately keeps every unresolved track so its stale `Colour`
+  can be blanked on import. Those tracks were counted as updates — a run enriching a
+  single track produced a 111-entry playlist. Membership is now derived from decision
+  status, as full-export mode already did.
+- **"Unable to Enrich" playlist is no longer silently dropped.** No-match tracks were
+  excluded from it for already appearing in "Updated Tracks", leaving it empty and
+  omitted from the output entirely. Kept-but-not-enriched tracks now land there, so
+  their blanked `Colour` actually applies on import instead of sitting in no playlist.
+
+### Changed
+- Release runbook documented in `CLAUDE.md` (branch flow, tagging, Mini deploy).
+
 ## [0.6.0] — 2026-07-19
 
 The "it actually works, and runs itself" release. A near-total engine rework for
