@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -369,3 +370,58 @@ def test_main_returns_1_on_unexpected_exception(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(daemon, "_load_config", _boom)
     assert daemon.main() == 1  # exception is swallowed, never propagates
+
+
+# --- file-stability + malformed-input guards ---------------------------------
+
+
+def test_wait_until_stable_true_for_static_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("time.sleep", lambda *_: None)  # no real waiting
+    f = tmp_path / "x.xml"
+    f.write_bytes(b"<a/>")
+    assert daemon._wait_until_stable(f) is True
+
+
+def test_wait_until_stable_false_when_never_settles(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    # Bound the loop: deadline set from the first monotonic() call, then jump past it.
+    clock = iter([0.0, 1.0, 2.0, 3.0, 1e9, 1e9])
+    monkeypatch.setattr("time.monotonic", lambda: next(clock))
+    sizes = iter(range(1, 1000))  # size grows on every stat → never stable
+
+    class _FakePath:
+        def stat(self) -> object:
+            v = next(sizes)
+            return SimpleNamespace(st_size=v, st_mtime=float(v))
+
+    assert daemon._wait_until_stable(_FakePath()) is False  # type: ignore[arg-type]
+
+
+def test_is_valid_xml(tmp_path: Path) -> None:
+    good = tmp_path / "good.xml"
+    good.write_bytes(b"<?xml version='1.0'?><DJ_PLAYLISTS><COLLECTION/></DJ_PLAYLISTS>")
+    bad = tmp_path / "bad.xml"
+    bad.write_bytes(b"<?xml version='1.0'?><DJ_PLAYLISTS><TRACK Name=\"unterminated")  # truncated mid-attr
+    assert daemon._is_valid_xml(good) is True
+    assert daemon._is_valid_xml(bad) is False
+
+
+def test_run_skips_invalid_xml_without_running_enricher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A mid-copy/malformed export must be skipped quietly (return 0), never crash the enricher.
+    config = _make_config(tmp_path)
+    config.watch_file.write_bytes(b'<DJ_PLAYLISTS><TRACK Name="partial')  # truncated
+    monkeypatch.setattr(daemon, "_wait_until_stable", lambda _p: True)
+    ran = {"x": False}
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: ran.__setitem__("x", True))
+    assert daemon._run(config) == 0
+    assert ran["x"] is False
+    assert not config.state_file.exists()
+
+
+def test_run_skips_when_file_never_stable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _make_config(tmp_path)
+    monkeypatch.setattr(daemon, "_wait_until_stable", lambda _p: False)
+    ran = {"x": False}
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: ran.__setitem__("x", True))
+    assert daemon._run(config) == 0
+    assert ran["x"] is False

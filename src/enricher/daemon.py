@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -37,6 +38,12 @@ _ENRICH_LOG_NAME = "enrich.log"
 _CHANGES_SUFFIX = ".changes.json"
 _STDERR_TAIL_CHARS = 2000
 _HTTP_TIMEOUT = 30.0
+# File-stability wait: launchd's WatchPaths fires the instant the watched file starts
+# changing, so a non-atomic export copy can be read mid-write (a truncated, unparseable
+# XML). Wait until (size, mtime) hold steady across a few checks before processing.
+_STABLE_CHECKS = 3
+_STABLE_INTERVAL_S = 1.5
+_STABLE_TIMEOUT_S = 90.0
 # Generous ceiling: a cold full-library run can take ~90 min; this only fires on a
 # genuine hang. launchd runs one instance at a time, so an unbounded hang would
 # silently stall every future trigger — the timeout turns that into a retryable failure.
@@ -212,10 +219,56 @@ def _try_post_discord(config: _Config, content: str, attachment: Path | None) ->
         _log(f"Discord delivery failed (ignored): {type(exc).__name__}")
 
 
+def _wait_until_stable(path: Path) -> bool:
+    """Return True once (size, mtime) hold steady across consecutive checks — the copy
+    has finished. Return False if it never settles within the timeout. Guards against
+    reading a file mid-write when the watcher does a non-atomic copy."""
+    last: tuple[int, float] | None = None
+    stable = 0
+    deadline = time.monotonic() + _STABLE_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            st = path.stat()
+        except OSError:
+            return False
+        sig = (st.st_size, st.st_mtime)
+        if sig == last:
+            stable += 1
+            if stable >= _STABLE_CHECKS:
+                return True
+        else:
+            stable = 0
+            last = sig
+        time.sleep(_STABLE_INTERVAL_S)
+    return False
+
+
+def _is_valid_xml(path: Path) -> bool:
+    """Cheap well-formedness check so a partial/malformed export is skipped quietly
+    rather than crashing the enricher with a traceback."""
+    from lxml import etree
+
+    try:
+        etree.parse(str(path))
+        return True
+    except (etree.XMLSyntaxError, OSError):
+        return False
+
+
 def _run(config: _Config) -> int:
     if not config.watch_file.is_file():
         _log(f"watch file not found: {config.watch_file}")
         return 2
+
+    if not _wait_until_stable(config.watch_file):
+        _log("watch file still changing after timeout — skipping, will retry on next trigger")
+        return 0
+
+    if not _is_valid_xml(config.watch_file):
+        # Almost always a mid-copy partial that lost the race even after the stability
+        # wait; skip quietly (no failure alarm) and let the next trigger reprocess.
+        _log("watch file is not valid XML (partial copy or malformed) — skipping, will retry")
+        return 0
 
     input_hash = _sha256_file(config.watch_file)
     if _load_state_hash(config.state_file) == input_hash:
