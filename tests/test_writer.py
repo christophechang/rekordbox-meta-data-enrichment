@@ -201,6 +201,71 @@ def test_write_enriched_xml_builds_unable_to_enrich_playlist(tmp_path: Path) -> 
     assert unresolved.find("TRACK[@Key='2']") is not None
 
 
+def test_write_enriched_xml_colour_cleared_track_not_in_updated_tracks(tmp_path: Path) -> None:
+    """A track kept in the COLLECTION only to blank a stale Colour is not an update.
+
+    Colour-confidence mode (the default) keeps every unresolved track so its Colour can be
+    blanked on import. Those tracks must land in "Unable to Enrich", never in "Updated Tracks" —
+    membership follows decision status, not survival in the COLLECTION.
+    """
+    source = tmp_path / "source.xml"
+    source.write_text(_BASIC_SOURCE_XML, encoding="utf-8")
+    output = tmp_path / "output.xml"
+
+    decisions = [
+        _make_enriched_decision("1"),
+        EnrichmentDecision(
+            track_id="2",
+            artist="Artist B",
+            title="Beta",
+            status="skipped_no_match",
+            clear_colour=True,
+        ),
+    ]
+    write_enriched_xml(source, output, decisions)
+    tree = etree.parse(str(output))
+
+    updated = tree.find(".//NODE[@Name='Updated Tracks']")
+    assert updated is not None
+    assert updated.get("Entries") == "1"
+    assert updated.find("TRACK[@Key='1']") is not None
+    assert updated.find("TRACK[@Key='2']") is None
+
+    # Kept in the COLLECTION for colour-blanking, and listed once under Unable to Enrich
+    assert tree.find(".//TRACK[@TrackID='2']") is not None
+    unresolved = tree.find(".//NODE[@Name='Unable to Enrich']")
+    assert unresolved is not None
+    assert unresolved.get("Entries") == "1"
+    assert unresolved.find("TRACK[@Key='2']") is not None
+
+
+def test_write_enriched_xml_colour_cleared_low_confidence_in_unable_to_enrich(tmp_path: Path) -> None:
+    """A kept low-confidence track belongs in a playlist, else its blanked Colour never imports."""
+    source = tmp_path / "source.xml"
+    source.write_text(_BASIC_SOURCE_XML, encoding="utf-8")
+    output = tmp_path / "output.xml"
+
+    decisions = [
+        _make_enriched_decision("1"),
+        EnrichmentDecision(
+            track_id="2",
+            artist="Artist B",
+            title="Beta",
+            status="skipped_low_confidence",
+            clear_colour=True,
+        ),
+    ]
+    write_enriched_xml(source, output, decisions)
+    tree = etree.parse(str(output))
+
+    updated = tree.find(".//NODE[@Name='Updated Tracks']")
+    assert updated is not None
+    assert updated.find("TRACK[@Key='2']") is None
+    unresolved = tree.find(".//NODE[@Name='Unable to Enrich']")
+    assert unresolved is not None
+    assert unresolved.find("TRACK[@Key='2']") is not None
+
+
 def test_write_enriched_xml_full_export_every_track_in_exactly_one_playlist(tmp_path: Path) -> None:
     source = tmp_path / "source.xml"
     source.write_text(_BASIC_SOURCE_XML, encoding="utf-8")

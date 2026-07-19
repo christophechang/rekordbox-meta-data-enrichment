@@ -120,11 +120,18 @@ def write_enriched_xml(
         already_complete_ids = [d.track_id for d in decisions if d.status == "skipped_already_complete"]
         updated_ids = enriched_ids + already_complete_ids
     else:
-        updated_ids = [element.get("TrackID", "") for element in collection.findall("TRACK")]
-        updated_id_set = set(updated_ids)
-        unresolved_ids = [
-            d.track_id for d in decisions if d.status == "skipped_no_match" and d.track_id not in updated_id_set
-        ]
+        # Delta mode: membership follows decision status, not survival in the COLLECTION.
+        # Colour-confidence mode keeps every unresolved track so its stale Colour can be blanked,
+        # so COLLECTION contents are NOT the set of updated tracks.
+        enriched_id_set = {d.track_id for d in decisions if d.status == "enriched"}
+        kept_ids = [element.get("TrackID", "") for element in collection.findall("TRACK")]
+        updated_ids = [track_id for track_id in kept_ids if track_id in enriched_id_set]
+        # Every kept-but-not-enriched track needs a playlist home: a track in no playlist is
+        # never imported, so its blanked Colour would never apply. No-match decisions trimmed
+        # from the COLLECTION stay listed too, preserving the delta-mode contract.
+        unresolved_ids = [track_id for track_id in kept_ids if track_id not in enriched_id_set]
+        listed = set(unresolved_ids)
+        unresolved_ids += [d.track_id for d in decisions if d.status == "skipped_no_match" and d.track_id not in listed]
     root.append(_build_playlists(updated_ids, unresolved_ids))
 
     if not dry_run:
