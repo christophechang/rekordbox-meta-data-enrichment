@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rekordbox-enricher"
-version = "0.5.0"
+version = "0.6.0"
 requires-python = ">=3.12"
 dependencies = [
     "httpx",
@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 enricher = "enricher.__main__:main"
+enricher-daemon = "enricher.daemon:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -40,10 +41,10 @@ ignore = ["E501"]
 [tool.mypy]
 strict = true
 python_version = "3.12"
-mypy_path = "src"
+mypy_path = "src:tests"
 exclude = ["build/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]

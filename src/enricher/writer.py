@@ -12,8 +12,6 @@ _ENRICHABLE_FIELDS: list[tuple[str, str]] = [
     ("label", "Label"),
     ("year", "Year"),
     ("remixer", "Remixer"),
-    ("album", "Album"),
-    ("mix", "Mix"),
 ]
 
 
@@ -79,22 +77,22 @@ def write_enriched_xml(
             to_remove.append(element)
             continue
 
-        # Apply metadata enrichment fields
+        # Apply metadata enrichment fields — whitelist × fields_changed × still-blank triple guard
         if decision.status == "enriched" and decision.match is not None:
-            match = decision.match
             for field_name, xml_attr in _ENRICHABLE_FIELDS:
-                new_value = getattr(match, field_name, "")
-                if new_value and xml_attr not in _PROTECTED_ATTRS:
-                    element.set(xml_attr, new_value)
+                change = decision.fields_changed.get(field_name)
+                if change is not None and not element.get(xml_attr, ""):
+                    element.set(xml_attr, change[1])
 
             if decision.confidence_colour is not None:
                 element.set("Colour", decision.confidence_colour)
 
             applied += 1
 
-        # In full_export mode, already-complete tracks are kept as-is so playlists resolve correctly
-        elif full_export and decision.status == "skipped_already_complete":
-            pass
+        # In full_export mode every decision-holding track is kept so playlist refs resolve
+        elif full_export:
+            if decision.clear_colour:
+                element.set("Colour", "")
 
         # Blank colour for tracks with no usable match in colour-confidence mode
         elif decision.clear_colour:

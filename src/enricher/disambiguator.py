@@ -3,13 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Literal
 
 import httpx
 
-from enricher.models import CandidateMatch, TrackRecord
-
-DisambigProvider = Literal["mistral", "groq", "gemini", "openrouter"]
+from enricher.models import CandidateMatch, DisambigProvider, TrackRecord
 
 _THINK_RE = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
@@ -32,18 +29,20 @@ def _strip_thinking(text: str) -> str:
 def _build_prompt(track: TrackRecord, candidates: list[CandidateMatch]) -> str:
     lines = [
         f"Track: {track.artist} — {track.name}",
-        f"Genre: {track.genre} | BPM: {track.bpm} | Key: {track.tonality}",
+        f"Genre: {track.genre} | BPM: {track.bpm} | Key: {track.tonality} | Duration: {track.duration_seconds}s",
         "",
         "Candidates:",
     ]
     for i, c in enumerate(candidates):
         lines.append(
-            f"  [{i}] {c.artist} — {c.title} | Label: {c.label} | Year: {c.year} | Remixer: {c.remixer} | Source: {c.source}"
+            f"  [{i}] {c.artist} — {c.title} | Label: {c.label} | Year: {c.year} | "
+            f"Remixer: {c.remixer} | Duration: {c.duration_seconds or '?'}s | Source: {c.source}"
         )
     return "\n".join(lines)
 
 
-def _parse_index(raw: str, num_candidates: int) -> int:
+def _parse_index(raw: str, num_candidates: int) -> int | None:
+    """None = unparseable or out-of-range (try the next provider). -1 = model said uncertain (stop)."""
     raw = _strip_thinking(raw).strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
@@ -51,11 +50,11 @@ def _parse_index(raw: str, num_candidates: int) -> int:
     try:
         data = json.loads(raw.strip())
         idx = int(data["index"])
-        if idx == -1 or 0 <= idx < num_candidates:
-            return idx
     except Exception:
-        pass
-    return -1
+        return None
+    if idx == -1 or 0 <= idx < num_candidates:
+        return idx
+    return None
 
 
 async def _call_openai_compat(
@@ -142,7 +141,7 @@ async def _try_openrouter(prompt: str, model: str) -> str | None:
             api_key,
             model,
             prompt,
-            extra_headers={"HTTP-Referer": "https://openclaw.local"},
+            extra_headers={"HTTP-Referer": "https://github.com/christophechang/rekordbox-meta-data-enrichment"},
             timeout=30,
         )
     except Exception:
@@ -158,25 +157,27 @@ async def disambiguate(
         return -1, None
 
     prompt = _build_prompt(track, candidates)
-
-    raw = await _try_mistral(prompt)
-    if raw is not None:
-        return _parse_index(raw, len(candidates)), "mistral"
-
-    raw = await _try_groq(prompt)
-    if raw is not None:
-        return _parse_index(raw, len(candidates)), "groq"
-
-    raw = await _try_gemini(prompt)
-    if raw is not None:
-        return _parse_index(raw, len(candidates)), "gemini"
-
-    raw = await _try_openrouter(prompt, "openrouter/free")
-    if raw is not None:
-        return _parse_index(raw, len(candidates)), "openrouter"
-
-    raw = await _try_openrouter(prompt, "mistralai/mistral-small")
-    if raw is not None:
-        return _parse_index(raw, len(candidates)), "openrouter"
-
+    providers: list[tuple[DisambigProvider, str | None]] = [
+        ("mistral", None),
+        ("groq", None),
+        ("gemini", None),
+        ("openrouter", "openrouter/auto"),
+        ("openrouter", "mistralai/mistral-small"),
+    ]
+    for name, openrouter_model in providers:
+        if name == "mistral":
+            raw = await _try_mistral(prompt)
+        elif name == "groq":
+            raw = await _try_groq(prompt)
+        elif name == "gemini":
+            raw = await _try_gemini(prompt)
+        else:
+            assert openrouter_model is not None  # noqa: S101 — table above guarantees it
+            raw = await _try_openrouter(prompt, openrouter_model)
+        if raw is None:
+            continue
+        idx = _parse_index(raw, len(candidates))
+        if idx is None:
+            continue  # provider answered garbage — fall through, don't terminate
+        return idx, name
     return -1, None

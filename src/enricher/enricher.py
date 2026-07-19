@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import sys
 
+from enricher.beatport import lookup_beatport
 from enricher.cache import CacheProtocol
 from enricher.disambiguator import disambiguate
-from enricher.lookup import lookup_discogs, lookup_musicbrainz
+from enricher.lookup import (
+    SourceLookupError,
+    discogs_master_year,
+    has_remix_designator,
+    lookup_discogs,
+    lookup_musicbrainz,
+    mb_recording_details,
+)
 from enricher.models import CandidateMatch, EnrichmentDecision, TrackRecord
-from enricher.scorer import filter_styles_by_bpm, score_all
+from enricher.scorer import score_all
 
 # Keywords in artist or title that indicate an unofficial release, checked when no API match found.
 # Ordered by specificity — first match wins.
@@ -54,37 +62,17 @@ def _heuristic_label(track: TrackRecord) -> str | None:
     return None
 
 
-def _apply_styles(track: TrackRecord, best: CandidateMatch, all_candidates: list[CandidateMatch]) -> CandidateMatch:
-    """Populate the mix field with BPM-compatible Discogs style tags when mix is unused.
-
-    Collects styles from the best match (or borrows from any Discogs candidate if the best
-    has none), filters by the track's BPM, and writes the result as a comma-separated string.
-    Skipped if the track already has a mix designation or no compatible styles are found.
-    """
-    if track.mix:
-        return best
-    styles = best.styles
-    if not styles:
-        discogs_with_styles = [c for c in all_candidates if c.source == "discogs" and c.styles]
-        if discogs_with_styles:
-            styles = max(discogs_with_styles, key=lambda c: c.confidence).styles
-    compatible = filter_styles_by_bpm(styles, track.bpm)
-    if not compatible:
-        return best
-    return best.model_copy(update={"mix": ", ".join(compatible)})
+# The only fields enrichment may ever propose. Fill-blank-only: a change exists
+# only when the track's field is empty — non-empty values are never replaced.
+_ENRICHABLE = ("label", "year", "remixer")
 
 
 def _fields_changed(track: TrackRecord, match: CandidateMatch) -> dict[str, tuple[str, str]]:
     changes: dict[str, tuple[str, str]] = {}
-    field_pairs: list[tuple[str, str, str]] = [
-        ("label", track.label, match.label),
-        ("year", track.year, match.year),
-        ("remixer", track.remixer, match.remixer),
-        ("album", track.album, match.album),
-        ("mix", track.mix, match.mix),
-    ]
-    for field, old, new in field_pairs:
-        if new and new != old:
+    for field in _ENRICHABLE:
+        old = str(getattr(track, field))
+        new = str(getattr(match, field))
+        if new and not old:
             changes[field] = (old, new)
     return changes
 
@@ -102,45 +90,82 @@ async def process_track(
     discogs_token: str | None = None,
     colour_confidence: bool = False,
 ) -> EnrichmentDecision:
-    cached = cache.get(track.artist, track.name)
-    if cached is not None:
-        _candidates, decision = cached
-        return decision.model_copy(update={"cache_hit": True})
-
     if _is_already_complete(track):
-        decision = EnrichmentDecision(
+        return EnrichmentDecision(
             track_id=track.track_id,
             artist=track.artist,
             title=track.name,
             status="skipped_already_complete",
         )
-        cache.put(track.artist, track.name, [], decision)
-        return decision
 
-    # --- Lookup ---
-    candidates: list[CandidateMatch] = []
-    try:
-        if sources in ("musicbrainz", "both"):
-            mb_candidates = await lookup_musicbrainz(track)
-            candidates.extend(mb_candidates)
+    cached = cache.get(track.artist, track.name)
+    cache_hit = cached is not None
+    candidates: list[CandidateMatch] = list(cached) if cached is not None else []
 
-        scored = score_all(track, candidates)
-        best_mb_score = scored[0].confidence if scored else 0.0
+    if not cache_hit:
+        # --- Live lookup ---
+        try:
 
-        best_mb_has_label = bool(scored[0].label) if scored else False
-        if sources in ("discogs", "both") and (best_mb_score < confidence_threshold or not best_mb_has_label):
-            discogs_candidates = await lookup_discogs(track, token=discogs_token)
-            candidates.extend(discogs_candidates)
-            scored = score_all(track, candidates)
+            def _confident(cands: list[CandidateMatch]) -> bool:
+                s = score_all(track, cands)
+                return bool(s) and s[0].confidence >= confidence_threshold and bool(s[0].label)
 
-    except Exception as exc:
-        print(f"ERROR lookup failed for {track.artist} — {track.name}: {exc}", file=sys.stderr)
-        return EnrichmentDecision(
-            track_id=track.track_id,
-            artist=track.artist,
-            title=track.name,
-            status="skipped_api_error",
-        )
+            if sources in ("beatport", "all"):
+                try:
+                    candidates.extend(await lookup_beatport(track))
+                except SourceLookupError as exc:
+                    if "no credentials" not in str(exc):
+                        raise
+                    print(f"WARNING: beatport skipped — {exc}", file=sys.stderr)
+
+            if sources in ("discogs", "both", "all") and not _confident(candidates):
+                candidates.extend(await lookup_discogs(track, token=discogs_token))
+
+            if sources in ("musicbrainz", "both", "all") and not _confident(candidates):
+                candidates.extend(await lookup_musicbrainz(track))
+
+            # MB search can't supply label/remixer — a recording-detail + release lookup can.
+            # Soft-fails (never raises), so this refinement can't turn a match into an error.
+            probe = score_all(track, candidates)
+            if probe and probe[0].source == "musicbrainz" and probe[0].source_id:
+                best_probe = probe[0]
+                needs_label = not track.label and not best_probe.label
+                needs_remixer = not track.remixer and not best_probe.remixer
+                if needs_label or needs_remixer:
+                    label, remixer = await mb_recording_details(best_probe.source_id)
+                    if label or remixer:
+                        for i, c in enumerate(candidates):
+                            if c.source == "musicbrainz" and c.source_id == best_probe.source_id:
+                                candidates[i] = c.model_copy(
+                                    update={"label": c.label or label, "remixer": c.remixer or remixer}
+                                )
+                                break
+
+            # Original-mix titles: resolve Discogs winner to its master for the original year
+            if (
+                probe
+                and probe[0].source == "discogs"
+                and probe[0].source_id
+                and not track.year
+                and not has_remix_designator(track.name)
+            ):
+                master_year = await discogs_master_year(probe[0].source_id, discogs_token)
+                if master_year:
+                    for i, c in enumerate(candidates):
+                        if c.source == "discogs" and c.source_id == probe[0].source_id:
+                            candidates[i] = c.model_copy(update={"year": master_year})
+                            break
+        except SourceLookupError as exc:
+            print(f"ERROR lookup failed for {track.artist} — {track.name}: {exc}", file=sys.stderr)
+            return EnrichmentDecision(
+                track_id=track.track_id,
+                artist=track.artist,
+                title=track.name,
+                status="skipped_api_error",
+            )
+        cache.put(track.artist, track.name, candidates)
+
+    scored = score_all(track, candidates)
 
     if not scored:
         heuristic = _heuristic_label(track)
@@ -162,6 +187,7 @@ async def process_track(
                 match=synthetic,
                 fields_changed=changed,
                 confidence_colour=COLOUR_RED if colour_confidence else None,
+                cache_hit=cache_hit,
             )
         else:
             # skipped_no_match is never cached — retried on every run so query
@@ -172,11 +198,11 @@ async def process_track(
                 title=track.name,
                 status="skipped_no_match",
                 clear_colour=colour_confidence,
+                cache_hit=cache_hit,
             )
-        cache.put(track.artist, track.name, [], decision)
         return decision
 
-    best = _apply_styles(track, _fill_label(scored[0], candidates), candidates)
+    best = _fill_label(scored[0], candidates)
 
     # --- Auto-enrich path (high confidence) ---
     if best.confidence >= confidence_threshold:
@@ -187,6 +213,7 @@ async def process_track(
                 artist=track.artist,
                 title=track.name,
                 status="skipped_already_complete",
+                cache_hit=cache_hit,
             )
         else:
             colour = COLOUR_GREEN if colour_confidence else None
@@ -198,8 +225,8 @@ async def process_track(
                 match=best,
                 fields_changed=changed,
                 confidence_colour=colour,
+                cache_hit=cache_hit,
             )
-        cache.put(track.artist, track.name, scored, decision)
         return decision
 
     # --- LLM disambiguation path ---
@@ -207,7 +234,7 @@ async def process_track(
         ambiguous = [c for c in scored if c.confidence >= _DISAMBIG_LOW]
         chosen_idx, provider = await disambiguate(track, ambiguous)
         if chosen_idx >= 0 and provider is not None:
-            chosen = _apply_styles(track, _fill_label(ambiguous[chosen_idx], candidates), candidates)
+            chosen = _fill_label(ambiguous[chosen_idx], candidates)
             changed = _fields_changed(track, chosen)
             if not changed:
                 decision = EnrichmentDecision(
@@ -215,6 +242,7 @@ async def process_track(
                     artist=track.artist,
                     title=track.name,
                     status="skipped_already_complete",
+                    cache_hit=cache_hit,
                 )
             else:
                 colour = COLOUR_ORANGE if colour_confidence else None
@@ -227,8 +255,8 @@ async def process_track(
                     fields_changed=changed,
                     disambiguation_used=provider,
                     confidence_colour=colour,
+                    cache_hit=cache_hit,
                 )
-            cache.put(track.artist, track.name, scored, decision)
             return decision
 
     # --- Colour-confidence mode: apply low-confidence matches with red ---
@@ -243,8 +271,8 @@ async def process_track(
                 match=best,
                 fields_changed=changed,
                 confidence_colour=COLOUR_RED,
+                cache_hit=cache_hit,
             )
-            cache.put(track.artist, track.name, scored, decision)
             return decision
 
     # --- Low confidence fallthrough ---
@@ -255,6 +283,6 @@ async def process_track(
         status="skipped_low_confidence",
         match=best,
         clear_colour=colour_confidence,
+        cache_hit=cache_hit,
     )
-    cache.put(track.artist, track.name, scored, decision)
     return decision

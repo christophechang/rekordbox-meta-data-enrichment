@@ -169,3 +169,6 @@ cython_debug/
 import/
 export/
 .enrichment_cache.json
+
+# Beatport auth token cache (contains access/refresh tokens)
+.beatport_token.json

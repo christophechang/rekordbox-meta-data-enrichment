@@ -7,6 +7,15 @@ import httpx
 
 from enricher.models import CandidateMatch, TrackRecord
 
+
+class SourceLookupError(Exception):
+    """A metadata source failed at the HTTP level. Never cached; surfaces as skipped_api_error."""
+
+    def __init__(self, source: str, detail: str) -> None:
+        self.source = source
+        super().__init__(f"{source}: {detail}")
+
+
 _MB_BASE = "https://musicbrainz.org/ws/2"
 _DISCOGS_BASE = "https://api.discogs.com"
 _USER_AGENT = "RekordboxEnricher/0.1 ( https://github.com/christophechang/rekordbox-meta-data-enrichment )"
@@ -16,8 +25,9 @@ _DISCOGS_SEMAPHORE: asyncio.Semaphore | None = None
 
 _MAX_CANDIDATES = 5
 
-# MusicBrainz: 3 req/sec with User-Agent header — stay comfortably under
-_MB_DELAY = 0.34  # ~2.9 req/sec
+# MusicBrainz policy: max 1 request/second per client. Stay under it.
+_MB_DELAY = 1.1
+_MB_RETRIES = 3
 
 # Discogs: 60 req/min authenticated, 25 req/min unauthenticated
 # Semaphore(1) serialises requests so each delay is meaningful (no burst)
@@ -39,22 +49,33 @@ def _get_discogs_semaphore() -> asyncio.Semaphore:
     return _DISCOGS_SEMAPHORE
 
 
-# Matches trailing BPM/key info appended to titles, e.g. "Track Title 128", "Mix (Extended) 1B 137"
-_TRAILING_BPM_RE = re.compile(r"\s+\d{1,3}[AB]?(\s+\d{2,3})?\s*$")
+# MIK artefacts only: trailing "7A", "7A 128", or "128 7A". Bare numbers are never
+# stripped — "Xpander 2" and "Vol. 3" are legitimate titles.
+_TRAILING_BPM_RE = re.compile(r"\s+(?:\d{1,2}[AB](?:\s+\d{2,3})?|\d{2,3}\s+\d{1,2}[AB])\s*$", re.IGNORECASE)
 
 # Matches catalogue numbers in brackets/parens, e.g. "[HTH115]", "(BTB002)"
 _CATALOGUE_RE = re.compile(r"[\[\(][A-Z]{2,}[-\s]?\d+[\]\)]")
 
-# Matches common mix/version/feat designators that DBs often omit from track listings
+# Matches common mix/version/feat designators that DBs often omit from track listings,
+# including the dominant club pattern "(<Artist> Remix)".
 _MIX_DESIGNATOR_RE = re.compile(
     r"\s*[\[\(]"
     r"(?:Original Mix|Extended Mix|Extended|Club Mix|VIP Mix|Dub Mix|Dub|Instrumental|"
-    r"Radio Edit|Radio Mix|Album Version|Single Version|\d{4}\s+Remaster(?:ed)?|"
+    r"Radio Edit|Radio Mix|Album Version|Single Version|\d{4}\s+Remaster(?:ed)?|Remaster(?:ed)?|"
     r"feat\.[^)\]]*|ft\.[^)\]]*|with\s+[^)\]]*|Featuring\s+[^)\]]*|"
-    r"[^)\]]+\s+(?:presents|pres\.?)\s+[^)\]]*)"
+    r"[^)\]]+\s+(?:presents|pres\.?)\s+[^)\]]*|"
+    r"[^)\]]+(?:'s)?\s+(?:Remix|Mix|Edit|Rework|Refix|Bootleg|VIP|Flip)|"
+    r"Remix)"
     r"[\]\)]\s*",
     re.IGNORECASE,
 )
+
+# Remix-TYPE versions get the remix's year; everything else (Original/Extended/Radio/Remaster)
+# is the original recording and gets the earliest release year. Spec §2 year rule.
+_REMIX_MARKER_RE = re.compile(r"[\(\[][^\)\]]*\b(?:remix|rework|refix|flip|bootleg|vip)\b[^\)\]]*[\)\]]", re.IGNORECASE)
+
+# Matches Lucene special characters that must be backslash-escaped in MusicBrainz queries
+_LUCENE_SPECIALS = re.compile(r'(&&|\|\||[+\-!(){}\[\]^"~*?:\\/])')
 
 
 def _clean_title(title: str) -> str:
@@ -67,6 +88,19 @@ def _clean_title(title: str) -> str:
 def _strip_mix_designators(title: str) -> str:
     """Remove mix/version/feat qualifiers — DBs often index the bare track name."""
     return _MIX_DESIGNATOR_RE.sub("", title).strip()
+
+
+def has_remix_designator(title: str) -> bool:
+    """True for remix-type versions (remix/rework/refix/flip/bootleg/vip) — these keep their own year.
+
+    "Extended Mix"/"Original Mix"/"Radio Edit"/"Remaster" are the original recording, not a new
+    version, so they return False and inherit the earliest release year instead.
+    """
+    return bool(_REMIX_MARKER_RE.search(title))
+
+
+def _escape_lucene(text: str) -> str:
+    return _LUCENE_SPECIALS.sub(r"\\\1", text)
 
 
 def _primary_artist(artist: str) -> str:
@@ -94,10 +128,10 @@ def _discogs_headers(token: str | None) -> dict[str, str]:
 
 
 def _best_mb_release(releases: list[object]) -> dict[str, object] | None:
-    """Pick the most useful release for label/year/album metadata.
+    """Pick the most useful release for album metadata.
 
-    Prefers non-compilation, non-DJ-mix releases (so we get the original label rather
-    than a compilation imprint), then breaks ties by earliest release date.
+    Prefers non-compilation, non-DJ-mix releases (so we get the original release rather
+    than a compilation reissue), then breaks ties by earliest release date.
     """
     valid = [r for r in releases if isinstance(r, dict)]
     if not valid:
@@ -139,36 +173,19 @@ def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
                 if isinstance(artist_obj, dict):
                     artist = str(artist_obj.get("name", ""))
 
-        # Pull label, year, album from best release (prefer non-compilation, then earliest)
-        label = ""
-        year = ""
+        # Year comes from the recording-level first-release-date — the true
+        # original-release year. Never from a release stub's own date, which
+        # reflects that specific pressing, not the recording's original release.
+        year = str(rec.get("first-release-date", "") or "")[:4]
+
+        # Pull album from best release (prefer non-compilation, then earliest).
+        # Search responses never carry label-info/relations, so label/remixer
+        # stay blank here — Task 5's recording-detail lookup fills them in.
         album = ""
         releases = rec.get("releases", [])
         best_release = _best_mb_release(releases if isinstance(releases, list) else [])
         if best_release is not None:
             album = str(best_release.get("title", ""))
-            date_raw = best_release.get("date", "")
-            year = str(date_raw)[:4] if date_raw else ""
-            label_info = best_release.get("label-info", [])
-            if isinstance(label_info, list) and label_info:
-                first_label = label_info[0]
-                if isinstance(first_label, dict):
-                    label_obj = first_label.get("label", {})
-                    if isinstance(label_obj, dict):
-                        label = str(label_obj.get("name", ""))
-
-        # Extract remixer from relations
-        remixer = ""
-        relations = rec.get("relations", [])
-        if isinstance(relations, list):
-            for rel in relations:
-                if not isinstance(rel, dict):
-                    continue
-                if str(rel.get("type", "")).lower() == "remixer":
-                    artist_obj = rel.get("artist", {})
-                    if isinstance(artist_obj, dict):
-                        remixer = str(artist_obj.get("name", ""))
-                        break
 
         candidates.append(
             CandidateMatch(
@@ -176,9 +193,9 @@ def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
                 source_id=str(rec.get("id", "")),
                 artist=artist,
                 title=title,
-                label=label,
+                label="",
                 year=year,
-                remixer=remixer,
+                remixer="",
                 album=album,
                 mix="",
                 duration_seconds=duration_seconds,
@@ -188,23 +205,23 @@ def _extract_mb_candidates(data: dict[str, object]) -> list[CandidateMatch]:
 
 
 async def _mb_query(artist: str, title: str) -> list[CandidateMatch]:
-    query = f'artist:"{artist}" AND recording:"{title}"'
-    params = {
-        "query": query,
-        "fmt": "json",
-        "limit": str(_MAX_CANDIDATES),
-        "inc": "releases labels artist-credits relations",
-    }
+    query = f'artist:"{_escape_lucene(artist)}" AND recording:"{_escape_lucene(title)}"'
+    params = {"query": query, "fmt": "json", "limit": str(_MAX_CANDIDATES)}
     async with _get_mb_semaphore():
-        await asyncio.sleep(_MB_DELAY)
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.get(f"{_MB_BASE}/recording/", params=params, headers=_mb_headers())
+        for attempt in range(_MB_RETRIES):
+            await asyncio.sleep(_MB_DELAY)
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.get(f"{_MB_BASE}/recording/", params=params, headers=_mb_headers())
+                if resp.status_code == 503:
+                    await asyncio.sleep(float(resp.headers.get("Retry-After", 2**attempt)))
+                    continue
                 resp.raise_for_status()
                 data: dict[str, object] = resp.json()
                 return _extract_mb_candidates(data)
-        except Exception:
-            return []
+            except httpx.HTTPError as exc:
+                raise SourceLookupError("musicbrainz", str(exc)) from exc
+    raise SourceLookupError("musicbrainz", f"still rate-limited after {_MB_RETRIES} attempts")
 
 
 async def lookup_musicbrainz(track: TrackRecord) -> list[CandidateMatch]:
@@ -218,6 +235,71 @@ async def lookup_musicbrainz(track: TrackRecord) -> list[CandidateMatch]:
     if not results and stripped_title != clean_title:
         results = await _mb_query(primary, stripped_title)
     return results
+
+
+async def mb_recording_details(mbid: str) -> tuple[str, str]:
+    """Fetch (label, remixer) for a recording — a soft-failing refinement.
+
+    Remixer comes from the recording's artist relations (`inc=artist-rels`). Label lives
+    on the release entity — the `labels` include is invalid on /recording and returns 400 —
+    so it needs a second lookup on the recording's best release. Either call soft-fails to an
+    empty value rather than raising: a detail hiccup never turns a match into skipped_api_error.
+    Build URLs directly so a '+' in a multi-value inc is not %2B-encoded.
+    """
+    url = f"{_MB_BASE}/recording/{mbid}?inc=releases+artist-rels&fmt=json"
+    async with _get_mb_semaphore():
+        await asyncio.sleep(_MB_DELAY)
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(url, headers=_mb_headers())
+                resp.raise_for_status()
+                data: dict[str, object] = resp.json()
+        except httpx.HTTPError:
+            return "", ""
+
+    remixer = ""
+    relations = data.get("relations", [])
+    if isinstance(relations, list):
+        for rel in relations:
+            if isinstance(rel, dict) and str(rel.get("type", "")).lower() == "remixer":
+                artist_obj = rel.get("artist", {})
+                if isinstance(artist_obj, dict):
+                    remixer = str(artist_obj.get("name", ""))
+                    break
+
+    releases = data.get("releases", [])
+    best = _best_mb_release(releases if isinstance(releases, list) else [])
+    release_id = str(best.get("id", "")) if isinstance(best, dict) else ""
+    label = await _mb_release_label(release_id) if release_id else ""
+    return label, remixer
+
+
+async def _mb_release_label(release_id: str) -> str:
+    """Label name from a release lookup (`inc=labels` is valid here, unlike on /recording).
+
+    Soft-fails to "". MusicBrainz uses the sentinel "[no label]" for genuinely unlabelled
+    releases (white labels) — treat that as blank rather than writing it into the library.
+    """
+    url = f"{_MB_BASE}/release/{release_id}?inc=labels&fmt=json"
+    async with _get_mb_semaphore():
+        await asyncio.sleep(_MB_DELAY)
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(url, headers=_mb_headers())
+                resp.raise_for_status()
+                data: dict[str, object] = resp.json()
+        except httpx.HTTPError:
+            return ""
+
+    label_info = data.get("label-info", [])
+    if isinstance(label_info, list) and label_info:
+        first = label_info[0]
+        if isinstance(first, dict):
+            label_obj = first.get("label", {})
+            if isinstance(label_obj, dict):
+                name = str(label_obj.get("name", ""))
+                return "" if name == "[no label]" else name
+    return ""
 
 
 def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> list[CandidateMatch]:
@@ -255,7 +337,7 @@ def _extract_discogs_candidates(data: dict[str, object], track_name: str) -> lis
                 label=label,
                 year=year,
                 remixer="",
-                album=str(result.get("title", "")),
+                album=title,
                 mix="",
                 styles=styles,
                 duration_seconds=None,
@@ -282,8 +364,8 @@ async def _discogs_query(artist: str, title: str, track_name: str, token: str | 
                 resp.raise_for_status()
                 ddata: dict[str, object] = resp.json()
                 return _extract_discogs_candidates(ddata, track_name)
-        except Exception:
-            return []
+        except httpx.HTTPError as exc:
+            raise SourceLookupError("discogs", str(exc)) from exc
 
 
 async def lookup_discogs(track: TrackRecord, token: str | None = None) -> list[CandidateMatch]:
@@ -297,3 +379,25 @@ async def lookup_discogs(track: TrackRecord, token: str | None = None) -> list[C
     if not results and stripped_title != clean_title:
         results = await _discogs_query(primary, stripped_title, track.name, token)
     return results
+
+
+async def discogs_master_year(release_id: str, token: str | None) -> str:
+    """Original-release year via the release's master. Soft-fails to '' — refinement only."""
+    delay = _DISCOGS_DELAY_AUTHED if token else _DISCOGS_DELAY_UNAUTHED
+    async with _get_discogs_semaphore():
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                await asyncio.sleep(delay)
+                rel = await client.get(f"{_DISCOGS_BASE}/releases/{release_id}", headers=_discogs_headers(token))
+                rel.raise_for_status()
+                rel_data: dict[str, object] = rel.json()
+                master_id = rel_data.get("master_id")
+                if not master_id:
+                    return str(rel_data.get("year") or "")
+                await asyncio.sleep(delay)
+                mst = await client.get(f"{_DISCOGS_BASE}/masters/{master_id}", headers=_discogs_headers(token))
+                mst.raise_for_status()
+                mst_data: dict[str, object] = mst.json()
+                return str(mst_data.get("year") or "")
+        except (httpx.HTTPError, ValueError):
+            return ""

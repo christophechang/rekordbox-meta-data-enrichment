@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd template for the enrich-on-export daemon.
+
+  Replace the __PLACEHOLDER__ tokens before installing (the deploy steps in
+  deploy/README.md sed-replace them):
+    __REPO__       absolute path to the cloned repo (contains .venv and .env)
+    __WATCH_FILE__ absolute path to the Rekordbox XML export to watch/enrich
+    __OUT_DIR__    absolute path to the daemon output directory (all writes land here)
+
+  Secrets (DISCORD_BOT_TOKEN, BEATPORT_*, DISCOGS_TOKEN, LLM keys, and optionally
+  ENRICH_DISCORD_CHANNEL_ID) live in __REPO__/.env — NOT in this plist. The daemon
+  loads them via load_dotenv() from its WorkingDirectory.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.rekordbox-enricher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>enricher.daemon</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>__WATCH_FILE__</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ENRICH_WATCH_FILE</key>
+        <string>__WATCH_FILE__</string>
+        <key>ENRICH_OUT_DIR</key>
+        <string>__OUT_DIR__</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__OUT_DIR__/launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__OUT_DIR__/launchd.log</string>
+</dict>
+</plist>

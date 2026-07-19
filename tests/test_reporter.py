@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enricher.models import CandidateMatch, EnrichmentDecision
-from enricher.reporter import build_report
+from enricher.reporter import build_changes, build_report
 
 
 def _enriched(track_id: str = "1", provider: str | None = None) -> EnrichmentDecision:
@@ -86,3 +86,51 @@ def test_report_shows_unresolved_section_for_low_confidence() -> None:
 def test_report_empty_decisions_does_not_crash() -> None:
     report = build_report([])
     assert "Total tracks processed : 0" in report
+
+
+def _enriched_decision() -> EnrichmentDecision:
+    match = CandidateMatch(
+        source="beatport",
+        source_id="777",
+        artist="Roni Size",
+        title="Fall Down (Calibre Remix)",
+        label="V Recordings",
+        year="2019",
+        confidence=0.91,
+    )
+    return EnrichmentDecision(
+        track_id="42",
+        artist="Roni Size",
+        title="Fall Down (Calibre Remix)",
+        status="enriched",
+        match=match,
+        fields_changed={"label": ("", "V Recordings"), "year": ("", "2019")},
+        confidence_colour="0x00FF00",
+    )
+
+
+def test_build_changes_one_entry_per_field() -> None:
+    changes = build_changes([_enriched_decision()])
+    assert len(changes) == 2
+    label_change = next(c for c in changes if c["field"] == "label")
+    assert label_change == {
+        "track_id": "42",
+        "artist": "Roni Size",
+        "title": "Fall Down (Calibre Remix)",
+        "field": "label",
+        "old": "",
+        "new": "V Recordings",
+        "source": "beatport",
+        "confidence": 0.91,
+        "colour": "0x00FF00",
+    }
+
+
+def test_build_changes_skips_non_enriched() -> None:
+    skipped = EnrichmentDecision(track_id="1", artist="A", title="T", status="skipped_no_match")
+    assert build_changes([skipped]) == []
+
+
+def test_report_names_winning_source() -> None:
+    report = build_report([_enriched_decision()])
+    assert "[beatport, green]" in report

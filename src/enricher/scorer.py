@@ -3,12 +3,14 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from enricher.lookup import has_remix_designator
 from enricher.models import CandidateMatch, TrackRecord
 
 # Remix suffix patterns to strip when comparing titles
 _REMIX_RE = re.compile(
-    r"\s*[\(\[]"
-    r"(?:original|club|radio|extended|instrumental|dub|vocal|mix|edit|version|vip|reprise|bootleg|rework|remix)"
+    r"\s*[\(\[][^\)\]]*"
+    r"\b(?:original|club|radio|extended|instrumental|dub|vocal|mix|edit|version|vip|reprise|"
+    r"bootleg|rework|refix|remix|remaster(?:ed)?|flip)\b"
     r"[^\)\]]*[\)\]]",
     re.IGNORECASE,
 )
@@ -105,6 +107,12 @@ _GENRE_FAMILIES: list[frozenset[str]] = [
     frozenset({"uk garage", "garage", "speed garage", "2-step"}),
     frozenset({"jungle", "breakbeat", "breaks"}),
     frozenset({"electronic", "electronica", "electro"}),
+    frozenset({"dubstep", "grime", "uk bass", "bass", "bass music", "140"}),
+    frozenset({"disco", "nu-disco", "nu disco", "funk", "boogie"}),
+    frozenset({"ambient", "downtempo", "trip hop", "trip-hop", "chillout"}),
+    frozenset({"hip hop", "hip-hop", "rap", "trap"}),
+    frozenset({"dub", "reggae", "dancehall"}),
+    frozenset({"hardcore", "happy hardcore", "rave", "gabber"}),
 ]
 
 
@@ -125,8 +133,10 @@ def _artist_score(track_artist: str, candidate_artist: str) -> float:
     norm_cand = _normalise(candidate_artist)
     if norm_track == norm_cand:
         return 0.40
-    # Check if one is contained in the other (handles "Artist feat. X" vs "Artist")
-    if norm_track in norm_cand or norm_cand in norm_track:
+    # Check if one is contained in the other (handles "Artist feat. X" vs "Artist").
+    # Guard against short names spuriously matching as a substring of an unrelated
+    # artist (e.g. "Ben" in "Benny Benassi").
+    if (norm_track in norm_cand or norm_cand in norm_track) and min(len(norm_track), len(norm_cand)) >= 4:
         return 0.35
     # Token overlap
     track_tokens = set(norm_track.split())
@@ -180,14 +190,31 @@ def _genre_bonus(track_genre: str, candidate_source: str) -> float:
     return 0.0
 
 
+def _mix_score(track_title: str, candidate_mix: str) -> float:
+    """Reward mix-name agreement, punish original-vs-remix mismatch.
+
+    Only Beatport candidates carry mix names; others return 0.0 (neutral).
+    """
+    if not candidate_mix:
+        return 0.0
+    track_is_remix = has_remix_designator(track_title)
+    cand_is_remix = has_remix_designator(f"({candidate_mix})")
+    if track_is_remix != cand_is_remix:
+        return -0.10
+    if track_is_remix and _normalise(candidate_mix) in _normalise(track_title):
+        return 0.05
+    return 0.02
+
+
 def score_candidate(track: TrackRecord, candidate: CandidateMatch) -> float:
     score = (
         _artist_score(track.artist, candidate.artist)
         + _title_score(track.name, candidate.title)
         + _duration_score(track.duration_seconds, candidate.duration_seconds)
         + _genre_bonus(track.genre, candidate.source)
+        + _mix_score(track.name, candidate.mix)
     )
-    return min(round(score, 4), 1.0)
+    return max(min(round(score, 4), 1.0), 0.0)
 
 
 def score_all(track: TrackRecord, candidates: list[CandidateMatch]) -> list[CandidateMatch]:
