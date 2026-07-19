@@ -19,3 +19,39 @@ Critical files:
 Default tests: no external services. Live integration tests must be explicit, opt-in, and separate. Mock HTTP with pytest/respx. Update tests whenever behavior changes.
 
 `ruff format . && ruff check . && mypy . && pytest`
+
+## Releasing a version
+
+`develop` is the integration branch — feature/fix PRs merge there. `main` holds releases.
+
+Note `ci.yml` triggers on `main` push/PR **only**, so a PR into `develop` reports no checks. The
+local check command above is the gate before merging; CI first runs when `main` is pushed. Never
+tag before that run is green.
+
+1. Merge the approved PR into `develop`.
+2. Bump `version` in `pyproject.toml` (semver: patch = bugfix, minor = new capability or changed
+   output/CLI contract).
+3. Add a dated `CHANGELOG.md` entry at the top, grouped `Added` / `Changed` / `Fixed`.
+4. Run `ruff format . && ruff check . && mypy . && pytest` — a release never proceeds on red.
+   The full suite takes ~2.5 minutes.
+5. Commit `chore: prepare vX.Y.Z release` on `develop` and push.
+6. Merge `develop` into `main` with `--no-ff`, message `chore: release vX.Y.Z`. Push `main` and
+   wait for CI to pass on it.
+7. Tag `vX.Y.Z` on **main's merge commit** (not develop's prepare commit) and push the tag.
+8. `gh release create vX.Y.Z` using that version's changelog section as the notes.
+9. Deploy — see below.
+10. Return to `develop`.
+
+### Deploying to the Mini
+
+The daemon runs on the Mac Mini from its own clone, reachable from the Air at
+`/Volumes/Macintosh HD-1/Users/christophechang/OpenClaw/Automations/RekordboxEnricher`. That clone
+tracks `develop` (which equals `main` at release time); deploy is a `git pull` there. Verify its
+`HEAD` SHA matches the release tag — the clone is separate, so a merged fix is not a deployed fix.
+
+No restart is needed: launchd `WatchPaths` invokes the daemon single-shot per file change, so the
+next export picks up new code. Editing the plist is the only thing that needs a reload.
+
+Health check: `touch` the watched file to force a run, then read `out/launchd.log` on the Mini.
+A run takes ~10 minutes over the full library. Note the sha256 guard skips a byte-identical input
+(`unchanged since last run, skipping`) — to force real work, the export must actually differ.
